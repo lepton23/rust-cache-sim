@@ -1,1 +1,6 @@
-tracefiles/
+trace-files/
+trace-files/*
+
+# Added by cargo
+
+/target
