@@ -15,7 +15,11 @@ pub struct TraceEntry {
 }
 
 // static hex lookup table prepared at compile time
-static HEX_LUT: [u8; 256] = {
+// alighn to cache line size
+#[repr(align(64))]
+struct HexLut([u8; 256]);
+
+static HEX_LUT: HexLut = HexLut({
         let mut lut = [255u8; 256];
         let mut i = 0;
         while i < 10 {
@@ -29,44 +33,76 @@ static HEX_LUT: [u8; 256] = {
                 i += 1;
         }
         lut
-};
+});
 
 // assume valid input for maximum speed
+// use get_unchecked to avoid bounds checks since we assume input is valid
 #[inline(always)]
-fn parse_hex_u64(bytes: &[u8]) -> u64 {
-        ((HEX_LUT[bytes[0] as usize] as u64) << 60)
-        | ((HEX_LUT[bytes[1] as usize] as u64) << 56)
-        | ((HEX_LUT[bytes[2] as usize] as u64) << 52)
-        | ((HEX_LUT[bytes[3] as usize] as u64) << 48)
-        | ((HEX_LUT[bytes[4] as usize] as u64) << 44)
-        | ((HEX_LUT[bytes[5] as usize] as u64) << 40)
-        | ((HEX_LUT[bytes[6] as usize] as u64) << 36)
-        | ((HEX_LUT[bytes[7] as usize] as u64) << 32)
-        | ((HEX_LUT[bytes[8] as usize] as u64) << 28)
-        | ((HEX_LUT[bytes[9] as usize] as u64) << 24)
-        | ((HEX_LUT[bytes[10] as usize] as u64) << 20)
-        | ((HEX_LUT[bytes[11] as usize] as u64) << 16)
-        | ((HEX_LUT[bytes[12] as usize] as u64) << 12)
-        | ((HEX_LUT[bytes[13] as usize] as u64) << 8)
-        | ((HEX_LUT[bytes[14] as usize] as u64) << 4)
-        | (HEX_LUT[bytes[15] as usize] as u64)
+unsafe fn parse_hex_u16(ptr: *const u8) -> u16 {
+        ((HEX_LUT.0[*ptr.add(0) as usize] as u16) << 8)
+        | ((HEX_LUT.0[*ptr.add(1) as usize] as u16) << 4)
+        | (HEX_LUT.0[*ptr.add(2) as usize] as u16)
 }
 
 #[inline(always)]
-fn parse_hex_u16(bytes: &[u8]) -> u16 {
-        ((HEX_LUT[bytes[0] as usize] as u16) << 8)
-        | ((HEX_LUT[bytes[1] as usize] as u16) << 4)
-        | (HEX_LUT[bytes[2] as usize] as u16)
+unsafe fn parse_hex_u64(ptr: *const u8) -> u64 {
+
+        // Load all nibbles first as it's better for CPU pipelining
+        unsafe {
+                let n0 = HEX_LUT.0[*ptr.add(0) as usize] as u64;
+                let n1 = HEX_LUT.0[*ptr.add(1) as usize] as u64;
+                let n2 = HEX_LUT.0[*ptr.add(2) as usize] as u64;
+                let n3 = HEX_LUT.0[*ptr.add(3) as usize] as u64;
+                let n4 = HEX_LUT.0[*ptr.add(4) as usize] as u64;
+                let n5 = HEX_LUT.0[*ptr.add(5) as usize] as u64;
+                let n6 = HEX_LUT.0[*ptr.add(6) as usize] as u64;
+                let n7 = HEX_LUT.0[*ptr.add(7) as usize] as u64;
+                let n8 = HEX_LUT.0[*ptr.add(8) as usize] as u64;
+                let n9 = HEX_LUT.0[*ptr.add(9) as usize] as u64;
+                let n10 = HEX_LUT.0[*ptr.add(10) as usize] as u64;
+                let n11 = HEX_LUT.0[*ptr.add(11) as usize] as u64;
+                let n12 = HEX_LUT.0[*ptr.add(12) as usize] as u64;
+                let n13 = HEX_LUT.0[*ptr.add(13) as usize] as u64;
+                let n14 = HEX_LUT.0[*ptr.add(14) as usize] as u64;
+                let n15 = HEX_LUT.0[*ptr.add(15) as usize] as u64;
+                
+                // Combine
+                (n0 << 60) | (n1 << 56) | (n2 << 52) | (n3 << 48)
+                | (n4 << 44) | (n5 << 40) | (n6 << 36) | (n7 << 32)
+                | (n8 << 28) | (n9 << 24) | (n10 << 20) | (n11 << 16)
+                | (n12 << 12) | (n13 << 8) | (n14 << 4) | n15
+        }
 }
 
-// Parse single tracefile line
+// #[inline(always)]
+// unsafe fn parse_hex_u64_ptr(ptr: *const u8) -> u64 {
+//         ((HEX_LUT.0[*ptr.add(0) as usize] as u64) << 60)
+//         | ((HEX_LUT.0[*ptr.add(1) as usize] as u64) << 56)
+//         | ((HEX_LUT.0[*ptr.add(2) as usize] as u64) << 52)
+//         | ((HEX_LUT.0[*ptr.add(3) as usize] as u64) << 48)
+//         | ((HEX_LUT.0[*ptr.add(4) as usize] as u64) << 44)
+//         | ((HEX_LUT.0[*ptr.add(5) as usize] as u64) << 40)
+//         | ((HEX_LUT.0[*ptr.add(6) as usize] as u64) << 36)
+//         | ((HEX_LUT.0[*ptr.add(7) as usize] as u64) << 32)
+//         | ((HEX_LUT.0[*ptr.add(8) as usize] as u64) << 28)
+//         | ((HEX_LUT.0[*ptr.add(9) as usize] as u64) << 24)
+//         | ((HEX_LUT.0[*ptr.add(10) as usize] as u64) << 20)
+//         | ((HEX_LUT.0[*ptr.add(11) as usize] as u64) << 16)
+//         | ((HEX_LUT.0[*ptr.add(12) as usize] as u64) << 12)
+//         | ((HEX_LUT.0[*ptr.add(13) as usize] as u64) << 8)
+//         | ((HEX_LUT.0[*ptr.add(14) as usize] as u64) << 4)
+//         | (HEX_LUT.0[*ptr.add(15) as usize] as u64)
+// }
+
+
+// read trace file in parallel
 #[inline(always)]
 unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
-
+        let ptr = line.as_ptr();
         TraceEntry {
-                address: parse_hex_u64(&line[17..33]),
-                op_type: *line.get_unchecked(34),
-                size: parse_hex_u16(&line[36..39]),
+                address: unsafe { parse_hex_u64(ptr.add(17)) },
+                op_type: *ptr.add(34),
+                size: unsafe { parse_hex_u16(ptr.add(36)) },
         }
 }
 
@@ -126,6 +162,9 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                 );
         }
 
+        // 40 bytes per line in trace file including newlines
+        let estimated_lines = mmap.len() / 40; 
+
         let num_threads = rayon::current_num_threads();
         let chunk_size = mmap.len() / num_threads;
 
@@ -149,21 +188,27 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
 
         chunk_starts.push(mmap.len());
 
-        // parse chunks in parallel - using flat_map_iter to avoid intermediate vecs
+        // parse chunks in parallel using the precomputed chunk boundaries, collecting results into a single vector
         let entries: Vec<_> = chunk_starts.par_windows(2)
-                .flat_map_iter(|window| {
-                        let chunk = &mmap[window[0]..window[1]];
-                        let estimated_lines = chunk.len() / 40;
-                        let mut chunk_entries = Vec::with_capacity(estimated_lines);
-
-                        for line in chunk.split(|&b| b == b'\n') {
-                                if line.len() == 39 {
-                                        chunk_entries.push(unsafe { parse_trace_line(line) });
+                .fold(
+                        || Vec::with_capacity(estimated_lines / num_threads),
+                        |mut acc, window| {
+                                let chunk = &mmap[window[0]..window[1]];
+                                for line in chunk.split(|&b| b == b'\n') {
+                                        if line.len() == 39 {
+                                                acc.push(unsafe { parse_trace_line(line) });
+                                        }
                                 }
+                                acc
                         }
-                        chunk_entries 
-                })
-                .collect();
+                )
+                .reduce(
+                        || Vec::with_capacity(estimated_lines),
+                        |mut acc, chunk_entries| {
+                                acc.extend(chunk_entries);
+                                acc
+                        }
+                );
 
         Ok(entries)
 }
