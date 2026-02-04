@@ -52,6 +52,7 @@ dependencies = [
 name = "p1-cachesim"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "memmap2",
  "rayon",
 ]

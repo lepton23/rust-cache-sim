@@ -3,6 +3,12 @@ name = "p1-cachesim"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
 [dependencies]
+libc = "0.2.180"
 memmap2 = "0.9.9"
 rayon = "1.11.0"
