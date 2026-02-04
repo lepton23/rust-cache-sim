@@ -11,6 +11,7 @@ pub struct TraceEntry {
         pub size: u16,
 }
 
+// static hex lookup table prepared at compile time
 static HEX_LUT: [u8; 256] = {
         let mut lut = [255u8; 256];
         let mut i = 0;
@@ -66,33 +67,54 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
         }
 }
 
-// Read in trace file as fast as possible
-// Time how long it takes
 
 pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Error>> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
 
-        let chunk_size = mmap.len() / rayon::current_num_threads().max(1);
-        let mut chunk_starts = vec![0];
-
-        for i in 1..rayon::current_num_threads() {
-                let pos = (i * chunk_size).min(mmap.len());
-
-                // find next newline
-                if let Some(newline_pos) = mmap[pos..].iter().position(|&b| b == b'\n') {
-                        chunk_starts.push(pos + newline_pos + 1);
-                } 
+        // advise kernel of access pattern for better readahead
+        unsafe {
+                libc::madvise(
+                        mmap.as_ptr() as *mut libc::c_void,
+                        mmap.len(),
+                        libc::MADV_WILLNEED | libc::MADV_SEQUENTIAL
+                );
         }
+
+        let num_threads = rayon::current_num_threads();
+        let chunk_size = mmap.len() / num_threads;
+
+        // parallel search for chunk boundaries
+        let mut chunk_starts: Vec<usize> = (0..num_threads)
+                .into_par_iter()
+                .map(|i| {
+                        if i == 0 {
+                                return 0;
+                        }
+                        let pos = i * chunk_size;
+                        if pos >= mmap.len() {
+                                return mmap.len();
+                        }
+                        // Find next newline
+                        pos + mmap[pos..].iter().position(|&b| b == b'\n').unwrap_or(0) + 1
+                })
+                .collect();
+
         chunk_starts.push(mmap.len());
 
+        // parse chunks in parallel - using flat_map_iter to avoid intermediate vecs
         let entries: Vec<_> = chunk_starts.par_windows(2)
-                .flat_map(|window| {
+                .flat_map_iter(|window| {
                         let chunk = &mmap[window[0]..window[1]];
-                                chunk.split(|&b| b == b'\n')
-                                        .filter(|line| line.len() == 39)
-                                        .map(|line| unsafe {parse_trace_line(line)})
-                                        .collect::<Vec<_>>()
+                        let estimated_lines = chunk.len() / 40;
+                        let mut chunk_entries = Vec::with_capacity(estimated_lines);
+
+                        for line in chunk.split(|&b| b == b'\n') {
+                                if line.len() == 39 {
+                                        chunk_entries.push(unsafe { parse_trace_line(line) });
+                                }
+                        }
+                        chunk_entries 
                 })
                 .collect();
 

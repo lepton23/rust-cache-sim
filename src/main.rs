@@ -14,12 +14,12 @@ CS4202 - Cache Simulation
 */
 
 
-// warm physical lab machine caches
+// prefetch tracefile into memory 
 fn warm_caches(path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
 
-        // tell kernel we need file sequentially
+        // advise kernel ahead that we need file sequentially
         unsafe {
                 libc::madvise(
                         mmap.as_ptr() as *mut libc::c_void,
@@ -28,7 +28,7 @@ fn warm_caches(path: &str) -> Result<(), Box<dyn std::error::Error>> {
                 );
         }
 
-        // touch pages in parallel
+        // touch pages in parallel to warm caches
         let chunk_size = mmap.len() / rayon::current_num_threads();
         (0..rayon::current_num_threads()).into_par_iter().for_each(|i| {
                 let start = i * chunk_size;
