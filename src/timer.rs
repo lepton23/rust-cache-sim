@@ -8,7 +8,7 @@ pub struct Timer {
 
 impl Timer {
         pub fn new(label: &str) -> Self {
-                println!("Starting: {}", label);
+                println!("\nStarting: {}", label);
                 Timer {
                         start: Instant::now(),
                         label: label.to_string(),
@@ -21,7 +21,7 @@ impl Timer {
 
         pub fn stop(&self) -> Duration {
                 let duration = self.start.elapsed();
-                println!("Finished: {} in {:?}", self.label, duration);
+                println!("Finished: {} in {:?}\n", self.label, duration);
                 duration
         }
 }

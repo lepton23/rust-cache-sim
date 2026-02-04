@@ -3,6 +3,9 @@ use std::fs::File;
 use memmap2::Mmap;
 use rayon::prelude::*;
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
 
 #[derive(Debug, Clone, Copy)]
 pub struct TraceEntry {
@@ -68,6 +71,48 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
 }
 
 
+// Use SIMD to find newline positions for chunking the file in parallel
+#[inline(always)]
+fn find_newline_simd(data: &[u8]) -> Option<usize> {
+        // lab PCs are x86_64 - using intel i5 14500 chips which support AVX2
+        #[cfg(target_arch = "x86_64")]
+        {
+                if is_x86_feature_detected!("avx2") {
+                        unsafe { return find_newline_avx2(data); }
+                }
+        }
+        data.iter().position(|&b| b == b'\n')
+}
+
+// AVX2 is an x86 extension that allows processing of 32 bytes in parallel in 256 bit wide registers using SIMD instructions.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn find_newline_avx2(data: &[u8]) -> Option<usize> {
+
+        // we initialise a needle register with 32 copies of the newline character
+        // the set1_epi8 function sets all 32 bytes of the register to the given value
+        let needle = _mm256_set1_epi8(b'\n' as i8);
+        let mut offset = 0;
+
+        // we load 32 bytes of the data into a register and compare it to the needle register using the cmpeq function
+        // we then use movemask to get a 32 bit mask where each bit corresponds to if the bytes were equal or not
+        // i.e. locating all newline characters in the 32 byte chunk in one instruction
+        while offset + 32 <= data.len() {
+                let chunk = _mm256_loadu_si256(data.as_ptr().add(offset) as *const __m256i);
+                let cmp = _mm256_cmpeq_epi8(chunk, needle);
+                let mask = _mm256_movemask_epi8(cmp);
+
+                if mask != 0 {
+                        return Some(offset + mask.trailing_zeros() as usize);
+                }
+                offset += 32;
+        }
+
+        // check remaining bytes
+        data[offset..].iter().position(|&b| b == b'\n').map(|pos| offset + pos)
+}
+
+
 pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Error>> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
@@ -96,7 +141,9 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                                 return mmap.len();
                         }
                         // Find next newline
-                        pos + mmap[pos..].iter().position(|&b| b == b'\n').unwrap_or(0) + 1
+                        find_newline_simd(&mmap[pos..])
+                                .map(|offset| pos + offset + 1) // +1 to start after newline
+                                .unwrap_or(mmap.len()) // if no newline found, end of file
                 })
                 .collect();
 
