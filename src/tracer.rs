@@ -141,22 +141,20 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                 );
         }
 
-        // 40 bytes per line in trace file including newlines
-        let estimated_lines = mmap.len() / 40; 
-
+        // get number of threads and get chunk size per thread
         let num_threads = thread::available_parallelism()?.get();
         let chunk_size = mmap.len() / num_threads;
 
-        // touch pages in parallel to warm caches before parsing
-        (0..num_threads).into_iter().for_each(|i| {
-                let start = i * chunk_size;
-                let end = ((i + 1) * chunk_size).min(mmap.len());
-                let mut dummy = 0u8;
-                for idx in (start..end).step_by(4096) {
-                        unsafe { dummy ^= mmap.get_unchecked(idx) };
-                }
-                std::hint::black_box(dummy);
-        });
+        // // touch pages in parallel to warm caches before parsing
+        // (0..num_threads).into_iter().for_each(|i| {
+        //         let start = i * chunk_size;
+        //         let end = ((i + 1) * chunk_size).min(mmap.len());
+        //         let mut dummy = 0u8;
+        //         for idx in (start..end).step_by(4096) {
+        //                 unsafe { dummy ^= mmap.get_unchecked(idx) };
+        //         }
+        //         std::hint::black_box(dummy);
+        // });
 
         // search for chunk boundaries
         let mut chunk_starts = Vec::with_capacity(num_threads + 1);
@@ -175,14 +173,18 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         }
         chunk_starts.push(mmap.len());
 
-        // First pass: count lines per chunk in parallel
+        // First pass over mmap: count lines per chunk in parallel
         let chunk_line_counts: Vec<usize> = thread::scope(|s| {
                 let handles: Vec<_> = (0..chunk_starts.len() - 1)
                 .map(|i| {
                         let start = chunk_starts[i];
                         let end = chunk_starts[i + 1];
+
+                        // copy mmap reference into closure
+                        let mmap_ref = &mmap;
+
                         s.spawn(move || {
-                                let chunk = &mmap[start..end];
+                                let chunk = &mmap_ref[start..end];
                                 chunk.split(|&b| b == b'\n')
                                         .filter(|line| line.len() == 39)
                                         .count()
@@ -193,17 +195,20 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                 handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
 
-        // Calculate offsets for each chunk in the final buffer
+        // calculate offsets for each chunk in the final buffer
         let mut offsets = vec![0usize; chunk_line_counts.len() + 1];
         for i in 0..chunk_line_counts.len() {
                 offsets[i + 1] = offsets[i] + chunk_line_counts[i];
         }
         let total_lines = offsets[chunk_line_counts.len()];
 
-        // Pre-allocate the entire output buffer
+        // pre-allocate entire output buffer
         let mut entries = Vec::with_capacity(total_lines);
         unsafe { entries.set_len(total_lines); }
-        let entries_ptr = entries.as_mut_ptr();
+
+        // pass a raw pointer to the entries buffer into the threads as a usize
+        // threads doesn't allow a trace entry pointer to be sent safely, so we send it as a usize and convert back to a pointer in the threads
+        let entries_addr = entries.as_mut_ptr() as usize;
 
         // Second pass: parse directly into pre-allocated positions
         thread::scope(|s| {
@@ -211,15 +216,21 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                         let start = chunk_starts[i];
                         let end = chunk_starts[i + 1];
                         let offset = offsets[i];
+
+                        // copy mmap reference into closure
+                        let mmap_ref = &mmap;
                         
                         s.spawn(move || {
-                                let chunk = &mmap[start..end];
+                                // convert entries_addr back to a pointer in the thread
+                                let ptr = entries_addr as *mut TraceEntry;
+
+                                let chunk = &mmap_ref[start..end];
                                 let mut local_offset = offset;
                                 
                                 for line in chunk.split(|&b| b == b'\n') {
                                         if line.len() == 39 {
                                                 unsafe {
-                                                        *entries_ptr.add(local_offset) = parse_trace_line(line);
+                                                        *ptr.add(local_offset) = parse_trace_line(line);
                                                 }
                                                 local_offset += 1;
                                         }

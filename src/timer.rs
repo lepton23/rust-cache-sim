@@ -15,10 +15,6 @@ impl Timer {
                 }
         }
 
-        pub fn elapsed(&self) -> Duration {
-                self.start.elapsed()
-        }
-
         pub fn stop(&self) -> Duration {
                 let duration = self.start.elapsed();
                 println!("Finished: {} in {:?}\n", self.label, duration);
