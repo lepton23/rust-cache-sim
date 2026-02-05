@@ -74,27 +74,6 @@ unsafe fn parse_hex_u64(ptr: *const u8) -> u64 {
         }
 }
 
-// #[inline(always)]
-// unsafe fn parse_hex_u64_ptr(ptr: *const u8) -> u64 {
-//         ((HEX_LUT.0[*ptr.add(0) as usize] as u64) << 60)
-//         | ((HEX_LUT.0[*ptr.add(1) as usize] as u64) << 56)
-//         | ((HEX_LUT.0[*ptr.add(2) as usize] as u64) << 52)
-//         | ((HEX_LUT.0[*ptr.add(3) as usize] as u64) << 48)
-//         | ((HEX_LUT.0[*ptr.add(4) as usize] as u64) << 44)
-//         | ((HEX_LUT.0[*ptr.add(5) as usize] as u64) << 40)
-//         | ((HEX_LUT.0[*ptr.add(6) as usize] as u64) << 36)
-//         | ((HEX_LUT.0[*ptr.add(7) as usize] as u64) << 32)
-//         | ((HEX_LUT.0[*ptr.add(8) as usize] as u64) << 28)
-//         | ((HEX_LUT.0[*ptr.add(9) as usize] as u64) << 24)
-//         | ((HEX_LUT.0[*ptr.add(10) as usize] as u64) << 20)
-//         | ((HEX_LUT.0[*ptr.add(11) as usize] as u64) << 16)
-//         | ((HEX_LUT.0[*ptr.add(12) as usize] as u64) << 12)
-//         | ((HEX_LUT.0[*ptr.add(13) as usize] as u64) << 8)
-//         | ((HEX_LUT.0[*ptr.add(14) as usize] as u64) << 4)
-//         | (HEX_LUT.0[*ptr.add(15) as usize] as u64)
-// }
-
-
 // read trace file in parallel
 #[inline(always)]
 unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
