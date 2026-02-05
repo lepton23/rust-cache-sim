@@ -39,34 +39,36 @@ static HEX_LUT: HexLut = HexLut({
 // use get_unchecked to avoid bounds checks since we assume input is valid
 #[inline(always)]
 unsafe fn parse_hex_u16(ptr: *const u8) -> u16 {
-        ((HEX_LUT.0[*ptr.add(0) as usize] as u16) << 8)
-        | ((HEX_LUT.0[*ptr.add(1) as usize] as u16) << 4)
-        | (HEX_LUT.0[*ptr.add(2) as usize] as u16)
+        let lut = &HEX_LUT.0;
+        unsafe { 
+                (*lut.get_unchecked(*ptr.add(0) as usize) as u16) << 8
+                | (*lut.get_unchecked(*ptr.add(1) as usize) as u16) << 4
+                | (*lut.get_unchecked(*ptr.add(2) as usize) as u16)
+        }
 }
 
 #[inline(always)]
 unsafe fn parse_hex_u64(ptr: *const u8) -> u64 {
-
-        // Load all nibbles first as it's better for CPU pipelining
+        let lut = &HEX_LUT.0;
+        // load nibbles first as its better for CPU pipelining
         unsafe {
-                let n0 = HEX_LUT.0[*ptr.add(0) as usize] as u64;
-                let n1 = HEX_LUT.0[*ptr.add(1) as usize] as u64;
-                let n2 = HEX_LUT.0[*ptr.add(2) as usize] as u64;
-                let n3 = HEX_LUT.0[*ptr.add(3) as usize] as u64;
-                let n4 = HEX_LUT.0[*ptr.add(4) as usize] as u64;
-                let n5 = HEX_LUT.0[*ptr.add(5) as usize] as u64;
-                let n6 = HEX_LUT.0[*ptr.add(6) as usize] as u64;
-                let n7 = HEX_LUT.0[*ptr.add(7) as usize] as u64;
-                let n8 = HEX_LUT.0[*ptr.add(8) as usize] as u64;
-                let n9 = HEX_LUT.0[*ptr.add(9) as usize] as u64;
-                let n10 = HEX_LUT.0[*ptr.add(10) as usize] as u64;
-                let n11 = HEX_LUT.0[*ptr.add(11) as usize] as u64;
-                let n12 = HEX_LUT.0[*ptr.add(12) as usize] as u64;
-                let n13 = HEX_LUT.0[*ptr.add(13) as usize] as u64;
-                let n14 = HEX_LUT.0[*ptr.add(14) as usize] as u64;
-                let n15 = HEX_LUT.0[*ptr.add(15) as usize] as u64;
+                let n0 = *lut.get_unchecked(*ptr.add(0) as usize) as u64;
+                let n1 = *lut.get_unchecked(*ptr.add(1) as usize) as u64;
+                let n2 = *lut.get_unchecked(*ptr.add(2) as usize) as u64;
+                let n3 = *lut.get_unchecked(*ptr.add(3) as usize) as u64;
+                let n4 = *lut.get_unchecked(*ptr.add(4) as usize) as u64;
+                let n5 = *lut.get_unchecked(*ptr.add(5) as usize) as u64;
+                let n6 = *lut.get_unchecked(*ptr.add(6) as usize) as u64;
+                let n7 = *lut.get_unchecked(*ptr.add(7) as usize) as u64;
+                let n8 = *lut.get_unchecked(*ptr.add(8) as usize) as u64;
+                let n9 = *lut.get_unchecked(*ptr.add(9) as usize) as u64;
+                let n10 = *lut.get_unchecked(*ptr.add(10) as usize) as u64;
+                let n11 = *lut.get_unchecked(*ptr.add(11) as usize) as u64;
+                let n12 = *lut.get_unchecked(*ptr.add(12) as usize) as u64;
+                let n13 = *lut.get_unchecked(*ptr.add(13) as usize) as u64;
+                let n14 = *lut.get_unchecked(*ptr.add(14) as usize) as u64;
+                let n15 = *lut.get_unchecked(*ptr.add(15) as usize) as u64;
                 
-                // Combine
                 (n0 << 60) | (n1 << 56) | (n2 << 52) | (n3 << 48)
                 | (n4 << 44) | (n5 << 40) | (n6 << 36) | (n7 << 32)
                 | (n8 << 28) | (n9 << 24) | (n10 << 20) | (n11 << 16)
@@ -146,6 +148,17 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
 
         let num_threads = rayon::current_num_threads();
         let chunk_size = mmap.len() / num_threads;
+
+        // touch pages in parallel to warm caches before parsing
+        (0..rayon::current_num_threads()).into_par_iter().for_each(|i| {
+                let start = i * chunk_size;
+                let end = ((i + 1) * chunk_size).min(mmap.len());
+                let mut dummy = 0u8;
+                for idx in (start..end).step_by(4096) {
+                        dummy ^= mmap[idx];
+                }
+                std::hint::black_box(dummy);
+        });
 
         // parallel search for chunk boundaries
         let mut chunk_starts: Vec<usize> = (0..num_threads)
