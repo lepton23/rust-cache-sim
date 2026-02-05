@@ -31,16 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         profile.print_summary();
 
         if !entries.is_empty() {
-                println!("First entry: addr={:016x}, op={} hex={:02x}, size={:03x}", 
+                println!("First entry: addr={:016x}, size={:03x}", 
                         entries[0].address, 
-                        entries[0].op_type as char,
-                        entries[0].op_type,
                         entries[0].size
                 );
-                println!("9th entry: addr={:016x}, op={} hex={:02x}, size={:03x}", 
+                println!("9th entry: addr={:016x}, size={:03x}", 
                         entries[8].address, 
-                        entries[8].op_type as char,
-                        entries[8].op_type,
                         entries[8].size
                 );
         }

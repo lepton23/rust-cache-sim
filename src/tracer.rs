@@ -1,7 +1,7 @@
 
 use std::fs::File;
 use memmap2::Mmap;
-use rayon::prelude::*;
+use std::thread;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -10,7 +10,6 @@ use std::arch::x86_64::*;
 #[derive(Debug, Clone, Copy)]
 pub struct TraceEntry {
         pub address: u64,
-        pub op_type: u8,
         pub size: u16,
 }
 
@@ -82,7 +81,6 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
         let ptr = line.as_ptr();
         TraceEntry {
                 address: unsafe { parse_hex_u64(ptr.add(17)) },
-                op_type: *ptr.add(34),
                 size: unsafe { parse_hex_u16(ptr.add(36)) },
         }
 }
@@ -115,7 +113,7 @@ unsafe fn find_newline_avx2(data: &[u8]) -> Option<usize> {
         // we then use movemask to get a 32 bit mask where each bit corresponds to if the bytes were equal or not
         // i.e. locating all newline characters in the 32 byte chunk in one instruction
         while offset + 32 <= data.len() {
-                let chunk = _mm256_loadu_si256(data.as_ptr().add(offset) as *const __m256i);
+                let chunk = unsafe { _mm256_loadu_si256(data.as_ptr().add(offset) as *const __m256i) };
                 let cmp = _mm256_cmpeq_epi8(chunk, needle);
                 let mask = _mm256_movemask_epi8(cmp);
 
@@ -146,61 +144,111 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         // 40 bytes per line in trace file including newlines
         let estimated_lines = mmap.len() / 40; 
 
-        let num_threads = rayon::current_num_threads();
+        let num_threads = thread::available_parallelism()?.get();
         let chunk_size = mmap.len() / num_threads;
 
         // touch pages in parallel to warm caches before parsing
-        (0..rayon::current_num_threads()).into_par_iter().for_each(|i| {
+        (0..num_threads).into_iter().for_each(|i| {
                 let start = i * chunk_size;
                 let end = ((i + 1) * chunk_size).min(mmap.len());
                 let mut dummy = 0u8;
                 for idx in (start..end).step_by(4096) {
-                        dummy ^= mmap[idx];
+                        unsafe { dummy ^= mmap.get_unchecked(idx) };
                 }
                 std::hint::black_box(dummy);
         });
 
-        // parallel search for chunk boundaries
-        let mut chunk_starts: Vec<usize> = (0..num_threads)
-                .into_par_iter()
-                .map(|i| {
-                        if i == 0 {
-                                return 0;
-                        }
-                        let pos = i * chunk_size;
-                        if pos >= mmap.len() {
-                                return mmap.len();
-                        }
-                        // Find next newline
-                        find_newline_simd(&mmap[pos..])
-                                .map(|offset| pos + offset + 1) // +1 to start after newline
-                                .unwrap_or(mmap.len()) // if no newline found, end of file
-                })
-                .collect();
-
+        // search for chunk boundaries
+        let mut chunk_starts = Vec::with_capacity(num_threads + 1);
+        chunk_starts.push(0);
+        
+        for i in 1..num_threads {
+                let pos = i * chunk_size;
+                if pos >= mmap.len() {
+                        chunk_starts.push(mmap.len());
+                        continue;
+                }
+                let next_newline = find_newline_simd(&mmap[pos..])
+                        .map(|offset| pos + offset + 1)
+                        .unwrap_or(mmap.len());
+                chunk_starts.push(next_newline);
+        }
         chunk_starts.push(mmap.len());
 
-        // parse chunks in parallel using the precomputed chunk boundaries, collecting results into a single vector
-        let entries: Vec<_> = chunk_starts.par_windows(2)
-                .fold(
-                        || Vec::with_capacity(estimated_lines / num_threads),
-                        |mut acc, window| {
-                                let chunk = &mmap[window[0]..window[1]];
+        // First pass: count lines per chunk in parallel
+        let chunk_line_counts: Vec<usize> = thread::scope(|s| {
+                let handles: Vec<_> = (0..chunk_starts.len() - 1)
+                .map(|i| {
+                        let start = chunk_starts[i];
+                        let end = chunk_starts[i + 1];
+                        s.spawn(move || {
+                                let chunk = &mmap[start..end];
+                                chunk.split(|&b| b == b'\n')
+                                        .filter(|line| line.len() == 39)
+                                        .count()
+                        })
+                })
+                .collect();
+                
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        // Calculate offsets for each chunk in the final buffer
+        let mut offsets = vec![0usize; chunk_line_counts.len() + 1];
+        for i in 0..chunk_line_counts.len() {
+                offsets[i + 1] = offsets[i] + chunk_line_counts[i];
+        }
+        let total_lines = offsets[chunk_line_counts.len()];
+
+        // Pre-allocate the entire output buffer
+        let mut entries = Vec::with_capacity(total_lines);
+        unsafe { entries.set_len(total_lines); }
+        let entries_ptr = entries.as_mut_ptr();
+
+        // Second pass: parse directly into pre-allocated positions
+        thread::scope(|s| {
+                for i in 0..chunk_starts.len() - 1 {
+                        let start = chunk_starts[i];
+                        let end = chunk_starts[i + 1];
+                        let offset = offsets[i];
+                        
+                        s.spawn(move || {
+                                let chunk = &mmap[start..end];
+                                let mut local_offset = offset;
+                                
                                 for line in chunk.split(|&b| b == b'\n') {
                                         if line.len() == 39 {
-                                                acc.push(unsafe { parse_trace_line(line) });
+                                                unsafe {
+                                                        *entries_ptr.add(local_offset) = parse_trace_line(line);
+                                                }
+                                                local_offset += 1;
                                         }
                                 }
-                                acc
-                        }
-                )
-                .reduce(
-                        || Vec::with_capacity(estimated_lines),
-                        |mut acc, chunk_entries| {
-                                acc.extend(chunk_entries);
-                                acc
-                        }
-                );
+                        });
+                }
+        });
+
+        // parse chunks in parallel using the precomputed chunk boundaries, collecting results into a single vector
+        // let entries: Vec<_> = chunk_starts.par_windows(2)
+        //         .fold(
+        //                 || Vec::with_capacity(estimated_lines / num_threads),
+        //                 |mut acc, window| {
+        //                         let chunk = &mmap[window[0]..window[1]];
+        //                         for line in chunk.split(|&b| b == b'\n') {
+        //                                 if line.len() == 39 {
+        //                                         acc.push(unsafe { parse_trace_line(line) });
+        //                                 }
+        //                         }
+        //                         acc
+        //                 }
+        //         )
+        //         .reduce(
+        //                 || Vec::with_capacity(estimated_lines),
+        //                 |mut acc, chunk_entries| {
+        //                         acc.extend(chunk_entries);
+        //                         acc
+        //                 }
+        //         );
 
         Ok(entries)
 }

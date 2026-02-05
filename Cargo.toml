@@ -13,4 +13,3 @@ panic = "abort"
 [dependencies]
 libc = "0.2.180"
 memmap2 = "0.9.9"
-rayon = "1.11.0"
