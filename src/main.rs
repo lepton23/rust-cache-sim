@@ -1,4 +1,9 @@
 
+use std::env;
+use std::fs;
+
+use serde_json::{Value};
+
 mod timer;
 use timer::{Timer, ProfileData};
 
@@ -10,9 +15,27 @@ CS4202 - Cache Simulation
 */
 
 
+// use same data type for each field of struct for cache alignment
+struct Cache {
+        level:          u64,
+        size:           u64,
+        line_size:      u64,
+        kind:           u8, // 0 = direct, 1 = 2way, 2 = 4way, 3 = 8way, 4 = fullassoc
+        rp:             u8, // 0 = rr, 1 = lru, 2 = lfu
+}
+
+
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let trace_path = "trace-files/bwaves.out";
+
+        let args: Vec<String> = env::args().collect();
+
+        let json_path = &args[1];
+        let trace_path = &args[2];
+
+        let json_path = "sample-inputs/direct.json";
+        let trace_path = "trace-files-ly/bwaves.out";
 
         let file_size = std::fs::metadata(trace_path)?.len();
 
@@ -40,6 +63,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         entries[8].size
                 );
         }
+
+
+        let json_data = fs::read_to_string(json_path)?;
+
+        // read in json
+        let json: serde_json::Value = 
+                serde_json::from_str(&json_data).expect("\nJSON formatted incorrectly.\n\n");
+        
+        println!("{:?}", json);
+
 
         Ok(())
 }
