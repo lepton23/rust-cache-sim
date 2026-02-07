@@ -1,13 +1,13 @@
 trace-files/
 trace-files/*
 
-/trace-files-ly
-/sample-inputs
-/sample-outputs
+trace-files-ly
+sample-inputs
+sample-outputs
 
-/trace-files-ly/*
-/sample-inputs/*
-/sample-outputs/*
+trace-files-ly/*
+sample-inputs/*
+sample-outputs/*
 
 perf.data
 perf.data.*
