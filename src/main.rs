@@ -31,9 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Time read operation
         let timer = Timer::new("Reading trace file");
-        let entries = read_trace(trace_path)?;
-        let read_duration = timer.stop();
 
+        // Read trace file
+        let entries = read_trace(trace_path)?;
+        
+
+        let read_duration = timer.stop();
         // Profile data
         let profile = ProfileData {
                 trace_size_bytes: file_size,
