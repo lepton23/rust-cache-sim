@@ -10,7 +10,7 @@ use std::arch::x86_64::*;
 #[derive(Debug, Clone, Copy)]
 pub struct TraceEntry {
         pub address: u64,
-        pub size: u16,
+        pub size: u8,
 }
 
 // static hex lookup table prepared at compile time
@@ -37,12 +37,12 @@ static HEX_LUT: HexLut = HexLut({
 // assume valid input for maximum speed
 // use get_unchecked to avoid bounds checks since we assume input is valid
 #[inline(always)]
-unsafe fn parse_hex_u16(ptr: *const u8) -> u16 {
-        let lut = &HEX_LUT.0;
+unsafe fn parse_decimal_u8(ptr: *const u8) -> u8 {
         unsafe { 
-                (*lut.get_unchecked(*ptr.add(0) as usize) as u16) << 8
-                | (*lut.get_unchecked(*ptr.add(1) as usize) as u16) << 4
-                | (*lut.get_unchecked(*ptr.add(2) as usize) as u16)
+                let d0 = *ptr.add(0).wrapping_sub(b'0'.into());
+                let d1 = *ptr.add(1).wrapping_sub(b'0'.into());
+                let d2 = *ptr.add(2).wrapping_sub(b'0'.into());
+                d0 * 100 + d1 * 10 + d2
         }
 }
 
@@ -81,7 +81,7 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
         let ptr = line.as_ptr();
         TraceEntry {
                 address: unsafe { parse_hex_u64(ptr.add(17)) },
-                size: unsafe { parse_hex_u16(ptr.add(36)) },
+                size: unsafe { parse_decimal_u8(ptr.add(36)) },
         }
 }
 

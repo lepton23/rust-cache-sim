@@ -2,6 +2,7 @@
 // use same data type for each field of struct for cache alignment
 #[derive(Debug)]
 pub struct CacheMeta {
+        pub name:          String,
         pub level:          u8, // 0 = l1, 1 = l2, 2 = l3, single named caches = 0
         pub size:           u64,
         pub line_size:      u64,
