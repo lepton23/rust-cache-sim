@@ -5,18 +5,19 @@ use crate::Cache;
 
 pub struct DirectCache {
         meta: CacheMeta,
-        num_lines: u64,
         offset_bits: u32,
         index_bits: u32,
-        tag_bits: u32,
 
         // cache storage
         // no need for valid bits or dirty bits since we are only simulating reads
         
         // store tags as a vector of u64s, where each u64 represents the tag of a cache line
         tags: Vec<u64>,
+        valid: Vec<bool>,
 
         hits: u64,
+        misses: u64,
+        main_memory_accesses: u64,
 
         // store a reference to lower level cache if exists
         lower: Option<Box<dyn Cache>>,
@@ -34,24 +35,28 @@ impl Cache for DirectCache {
 
                 DirectCache {
                         meta,
-                        num_lines,
                         offset_bits,
                         index_bits,
-                        tag_bits,
                         tags: vec![0; num_lines as usize],
+                        valid: vec![false; num_lines as usize],
                         hits: 0,
+                        misses: 0,
+                        main_memory_accesses: 0,
                         lower: None,
                 }
         }
 
         
         // perform access
-        fn access(&mut self, address: u64, size: u8) -> bool {
+        fn access(&mut self, address: u64, size: u8) {
                 // calculate which cache lines are accessed
                 let start_line = address / self.meta.line_size;
                 let end_line = (address + size as u64 - 1) / self.meta.line_size;
 
-                let mut all_hit = true;
+                // println!("Access addr={:#x} size={} -> start_line={} end_line={}", 
+                //         address, size, start_line, end_line);
+                // println!("  Index={} Tag={:#x}", self.get_index(address), self.get_tag(address));
+                // println!("  Target tag={:#x}", self.tags[self.get_index(address) as usize]);
 
                 // access each cache line that the address spans
                 for line_addr in start_line..=end_line {
@@ -60,28 +65,51 @@ impl Cache for DirectCache {
                         let tag = self.get_tag(line_address);
 
                         // check for hit
-                        if self.tags[index] == tag {
+                        if self.valid[index] && self.tags[index] == tag {
                                 self.hits += 1;
                         } else {
-                                all_hit = false;
+                                self.misses += 1;
 
                                 // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
                                 self.tags[index] = tag;
+                                self.valid[index] = true;
 
                                 // if we have a lower level cache, access it as well
                                 if let Some(lower_cache) = &mut self.lower {
+                                        // println!("--- Checking lower cache ---");
                                         lower_cache.access(line_address, self.meta.line_size as u8);
+                                } else {
+                                        self.main_memory_accesses += 1;
                                 }
 
                         }
                 }
 
-                all_hit
         }
 
 
         fn get_hits(&self) -> u64 {
-                self.hits
+                if let Some(lower_cache) = &self.lower {
+                        lower_cache.get_hits() + self.hits
+                } else {
+                        self.hits
+                }
+        }
+
+        fn get_misses(&self) -> u64 {
+                if let Some(lower_cache) = &self.lower {
+                        lower_cache.get_misses() + self.misses
+                } else {
+                        self.misses
+                }
+        }
+
+        fn get_main_memory_accesses(&self) -> u64 {
+                if let Some(lower_cache) = &self.lower {
+                        lower_cache.get_main_memory_accesses()
+                } else {
+                        self.main_memory_accesses
+                }
         }
 
         fn get_meta(&self) -> &CacheMeta {

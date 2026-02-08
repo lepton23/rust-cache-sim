@@ -262,5 +262,6 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         });
 
 
+
         Ok(entries)
 }

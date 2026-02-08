@@ -85,20 +85,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for entry in &entries {
                 top_cache.access(entry.address, entry.size);
         }
-
+        let cache_duration = cache_timer.stop();
 
         // get total hits and misses for all caches
-        let mut hits = 0;
-        for (i, cache) in caches.iter().enumerate() {
-                let meta = cache.get_meta();
-                hits += cache.get_hits();
-        }
+        let hits = top_cache.get_hits();
+        let misses = top_cache.get_misses();
+        let mma = top_cache.get_main_memory_accesses();
 
         println!("Total hits: {}", hits);
-        println!("Total misses: {}", entries.len() as u64 - hits);
+        println!("Total misses: {}", misses);
+        println!("Main memory accesses: {}", mma);
 
 
-        let cache_duration = cache_timer.stop();
         // Profile data
         let cache_profile = ProfileData {
                 trace_size_bytes: file_size,
