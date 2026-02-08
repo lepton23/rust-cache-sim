@@ -13,6 +13,12 @@ pub struct TraceEntry {
         pub size: u8,
 }
 
+#[derive(Copy, Clone)]
+struct SendPtr(*mut TraceEntry);
+unsafe impl Send for SendPtr {}
+unsafe impl Sync for SendPtr {}
+
+
 // static hex lookup table prepared at compile time
 // alighn to cache line size
 #[repr(align(64))]
@@ -39,9 +45,9 @@ static HEX_LUT: HexLut = HexLut({
 #[inline(always)]
 unsafe fn parse_decimal_u8(ptr: *const u8) -> u8 {
         unsafe { 
-                let d0 = *ptr.add(0).wrapping_sub(b'0'.into());
-                let d1 = *ptr.add(1).wrapping_sub(b'0'.into());
-                let d2 = *ptr.add(2).wrapping_sub(b'0'.into());
+                let d0 = (*ptr.add(0)).wrapping_sub(b'0'.into());
+                let d1 = (*ptr.add(1)).wrapping_sub(b'0'.into());
+                let d2 = (*ptr.add(2)).wrapping_sub(b'0'.into());
                 d0 * 100 + d1 * 10 + d2
         }
 }
@@ -163,13 +169,15 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         for i in 1..num_threads {
                 let pos = i * chunk_size;
                 if pos >= mmap.len() {
-                        chunk_starts.push(mmap.len());
-                        continue;
+                        break;
                 }
-                let next_newline = find_newline_simd(&mmap[pos..])
-                        .map(|offset| pos + offset + 1)
-                        .unwrap_or(mmap.len());
-                chunk_starts.push(next_newline);
+                // Find newline, convert to absolute position, and skip past it
+                if let Some(relative_pos) = find_newline_simd(&mmap[pos..]) {
+                        chunk_starts.push(pos + relative_pos + 1);  // +1 to start after the newline
+                } else {
+                        chunk_starts.push(mmap.len());
+                        break;
+                }
         }
         chunk_starts.push(mmap.len());
 
@@ -206,60 +214,53 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         let mut entries = Vec::with_capacity(total_lines);
         unsafe { entries.set_len(total_lines); }
 
-        // pass a raw pointer to the entries buffer into the threads as a usize
-        // threads doesn't allow a trace entry pointer to be sent safely, so we send it as a usize and convert back to a pointer in the threads
-        let entries_addr = entries.as_mut_ptr() as usize;
+        // wrap raw pointer in SendPtr to allow sending across threads safely
+        let send_ptr = SendPtr(entries.as_mut_ptr());
 
         // Second pass: parse directly into pre-allocated positions
         thread::scope(|s| {
-                for i in 0..chunk_starts.len() - 1 {
-                        let start = chunk_starts[i];
-                        let end = chunk_starts[i + 1];
-                        let offset = offsets[i];
+                let handles: Vec<_> = (0..chunk_starts.len() - 1)
+                        .map(|i| {
+                                let start = chunk_starts[i];
+                                let end = chunk_starts[i + 1];
+                                let offset = offsets[i];
+                                let expected_count = chunk_line_counts[i];
 
-                        // copy mmap reference into closure
-                        let mmap_ref = &mmap;
-                        
-                        s.spawn(move || {
-                                // convert entries_addr back to a pointer in the thread
-                                let ptr = entries_addr as *mut TraceEntry;
-
-                                let chunk = &mmap_ref[start..end];
-                                let mut local_offset = offset;
+                                // copy mmap reference into closure
+                                let mmap_ref = &mmap;
                                 
-                                for line in chunk.split(|&b| b == b'\n') {
-                                        if line.len() == 39 {
-                                                unsafe {
-                                                        *ptr.add(local_offset) = parse_trace_line(line);
+                                // Explicitly move send_ptr into a local variable
+                                let ptr = &send_ptr;
+                                
+                                // println!("Spawning thread for chunk {} with offset {} and {} lines", i, offset, expected_count);
+                                s.spawn(move || {
+                                        let chunk = &mmap_ref[start..end];
+                                        let mut local_offset = 0usize;
+
+                                        // Extract the raw pointer from SendPtr
+                                        let entries_ptr = ptr.0;
+                                        
+                                        for line in chunk.split(|&b| b == b'\n') {
+                                                if line.len() == 39 {
+                                                        // assert!(local_offset < expected_count, 
+                                                        //         "Chunk {}: parsed more lines ({}) than counted ({})", 
+                                                        //         i, local_offset + 1, expected_count);
+                                                        unsafe {
+                                                                std::ptr::write(entries_ptr.add(offset + local_offset), parse_trace_line(line));
+                                                        }
+                                                        local_offset += 1;
                                                 }
-                                                local_offset += 1;
                                         }
-                                }
-                        });
+                                        // println!("Thread for chunk {} parsed {} lines", i, local_offset);
+                                })
+                        })
+                        .collect();
+                
+                for handle in handles {
+                        handle.join().unwrap();
                 }
         });
 
-        // parse chunks in parallel using the precomputed chunk boundaries, collecting results into a single vector
-        // let entries: Vec<_> = chunk_starts.par_windows(2)
-        //         .fold(
-        //                 || Vec::with_capacity(estimated_lines / num_threads),
-        //                 |mut acc, window| {
-        //                         let chunk = &mmap[window[0]..window[1]];
-        //                         for line in chunk.split(|&b| b == b'\n') {
-        //                                 if line.len() == 39 {
-        //                                         acc.push(unsafe { parse_trace_line(line) });
-        //                                 }
-        //                         }
-        //                         acc
-        //                 }
-        //         )
-        //         .reduce(
-        //                 || Vec::with_capacity(estimated_lines),
-        //                 |mut acc, chunk_entries| {
-        //                         acc.extend(chunk_entries);
-        //                         acc
-        //                 }
-        //         );
 
         Ok(entries)
 }

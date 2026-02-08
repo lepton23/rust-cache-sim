@@ -29,10 +29,10 @@ pub struct ProfileData {
 }
 
 impl ProfileData {
-        pub fn print_summary(&self) {
+        pub fn print_summary(&self, label: &str) {
 
                 println!("\n=============================");
-                println!("=== Trace File Statistics ===");
+                println!("=== {} Statistics ===", label);
                 println!("File size: {} bytes ({:.2} MB)", 
                         self.trace_size_bytes, 
                         self.trace_size_bytes as f64 / 1_048_576.0

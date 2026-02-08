@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let file_size = std::fs::metadata(trace_path)?.len();
 
         // Time read operation
-        let timer = Timer::new("Running trace file");
+        let trace_timer = Timer::new("Running trace file");
 
         // Read trace file
         let entries = read_trace(trace_path)?;
@@ -46,7 +46,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
         }
 
+        let trace_duration = trace_timer.stop();
+        let trace_profile = ProfileData {
+                trace_size_bytes: file_size,
+                trace_entries: entries.len(),
+                read_duration: trace_duration,
+        };
+        trace_profile.print_summary("Trace File");
 
+
+        let json_timer = Timer::new("Reading cache metadata from JSON");
         let cachemetas: Vec<CacheMeta> = read_json(json_path)?;
 
         println!("Cache metadata: {:?}", cachemetas);
@@ -67,6 +76,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut top_cache = caches.pop().expect("Need at least one cache");
 
+        let json_duration = json_timer.stop();
+        println!("Caches initialised");
+        
+
+        let cache_timer = Timer::new("Running trace file on caches");
         // run tracefile on caches
         for entry in &entries {
                 top_cache.access(entry.address, entry.size);
@@ -84,15 +98,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Total misses: {}", entries.len() as u64 - hits);
 
 
-        let read_duration = timer.stop();
+        let cache_duration = cache_timer.stop();
         // Profile data
-        let profile = ProfileData {
+        let cache_profile = ProfileData {
                 trace_size_bytes: file_size,
                 trace_entries: entries.len(),
-                read_duration,
+                read_duration: cache_duration,
         };
-
-        profile.print_summary();
+        cache_profile.print_summary("Cache Simulation");
         
         Ok(())
 }

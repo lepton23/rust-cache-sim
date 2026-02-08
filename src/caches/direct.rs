@@ -108,9 +108,4 @@ impl DirectCache {
                 (address >> self.offset_bits) & mask
         }
 
-        // extract offset from address
-        fn get_offset(&self, address: u64) -> u64 {
-                let mask = (1 << self.offset_bits) - 1;
-                address & mask
-        }
 }
