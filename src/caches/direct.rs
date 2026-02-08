@@ -35,7 +35,7 @@ impl Cache for DirectCache {
                 let index_bits = num_lines.trailing_zeros();
                 let tag_bits = 64 - offset_bits - index_bits;
 
-                println!("Initializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, index bits={}, tag bits={}", 
+                println!("\nInitializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, index bits={}, tag bits={}\n", 
                         meta.name, meta.size, meta.line_size, num_lines, offset_bits, index_bits, tag_bits);
 
                 DirectCache {
@@ -58,7 +58,7 @@ impl Cache for DirectCache {
                 // calculate which cache lines are accessed (i.e. accesses that span across lines)
                 // end_line -1 since if we access the last byte of a line, it should still count as accessing that line
                 let start_line = address / self.meta.line_size;
-                let end_line = (address + size as u64 - 1) / self.meta.line_size; 
+                let end_line = (address + (size as u64) - 1) / self.meta.line_size; 
 
                 // access each cache line that the address spans
                 for line_addr in start_line..=end_line {
@@ -72,6 +72,11 @@ impl Cache for DirectCache {
                         } else {
                                 self.misses += 1;
                                 if end_line > start_line {
+                                        // println!("Size of overflow access: {} bytes (spans lines {:x} to {:x})", 
+                                        //         size, 
+                                        //         start_line * self.meta.line_size, 
+                                        //         end_line * self.meta.line_size
+                                        // );
                                         self.overflow_accesses += 1;
                                 }
 
