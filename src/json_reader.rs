@@ -30,13 +30,6 @@ pub fn read_json(path: &str) -> Result<Vec<CacheMeta>, Box<dyn std::error::Error
                         let rp = cache["replacement_policy"].as_str().expect("Expected str for replacement policy");
                 }
 
-                let level_u8: u8 = match name {
-                        "L1" => 0,
-                        "L2" => 1,
-                        "L3" => 2, 
-                        _ => 0,
-                };
-
                 let size_u64: u64 = size;
                 let line_size_u64: u64 = line_size;
 
@@ -59,9 +52,10 @@ pub fn read_json(path: &str) -> Result<Vec<CacheMeta>, Box<dyn std::error::Error
                 cachemetas.push(
                         CacheMeta {
                                 name: name.to_string(),
-                                level: level_u8, size: size_u64, 
+                                size: size_u64, 
                                 line_size: line_size_u64, 
-                                kind: kind_u8, rp: rp_u8
+                                kind: kind_u8, 
+                                rp: rp_u8
                         }
                 );
         }

@@ -151,7 +151,7 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         let num_threads = thread::available_parallelism()?.get();
         let chunk_size = mmap.len() / num_threads;
 
-        // // touch pages in parallel to warm caches before parsing
+        // touch pages in parallel to warm caches before parsing
         // (0..num_threads).into_iter().for_each(|i| {
         //         let start = i * chunk_size;
         //         let end = ((i + 1) * chunk_size).min(mmap.len());
@@ -224,7 +224,6 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                                 let start = chunk_starts[i];
                                 let end = chunk_starts[i + 1];
                                 let offset = offsets[i];
-                                let expected_count = chunk_line_counts[i];
 
                                 // copy mmap reference into closure
                                 let mmap_ref = &mmap;
@@ -232,7 +231,6 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                                 // Explicitly move send_ptr into a local variable
                                 let ptr = &send_ptr;
                                 
-                                // println!("Spawning thread for chunk {} with offset {} and {} lines", i, offset, expected_count);
                                 s.spawn(move || {
                                         let chunk = &mmap_ref[start..end];
                                         let mut local_offset = 0usize;
@@ -242,16 +240,12 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                                         
                                         for line in chunk.split(|&b| b == b'\n') {
                                                 if line.len() == 39 {
-                                                        // assert!(local_offset < expected_count, 
-                                                        //         "Chunk {}: parsed more lines ({}) than counted ({})", 
-                                                        //         i, local_offset + 1, expected_count);
                                                         unsafe {
                                                                 std::ptr::write(entries_ptr.add(offset + local_offset), parse_trace_line(line));
                                                         }
                                                         local_offset += 1;
                                                 }
                                         }
-                                        // println!("Thread for chunk {} parsed {} lines", i, local_offset);
                                 })
                         })
                         .collect();

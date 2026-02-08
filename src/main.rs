@@ -21,11 +21,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let args: Vec<String> = env::args().collect();
 
-        let json_path = &args[1];
-        let trace_path = &args[2];
+        // let json_path = &args[1];
+        // let trace_path = &args[2];
 
         let json_path = "sample-inputs/direct.json";
-        let trace_path = "trace-files-ly/bwaves.out";
+        let trace_path = "trace-files-ly/cactusbssn.out";
 
         let file_size = std::fs::metadata(trace_path)?.len();
 
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut top_cache = caches.pop().expect("Need at least one cache");
 
-        let json_duration = json_timer.stop();
+        json_timer.stop();
         println!("Caches initialised");
         
 
@@ -91,10 +91,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let hits = top_cache.get_hits();
         let misses = top_cache.get_misses();
         let mma = top_cache.get_main_memory_accesses();
+        let overflow = top_cache.get_overflow_accesses();
 
         println!("Total hits: {}", hits);
         println!("Total misses: {}", misses);
         println!("Main memory accesses: {}", mma);
+        println!("Overflow accesses (span multiple lines): {}", overflow);
 
 
         // Profile data

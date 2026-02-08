@@ -6,5 +6,6 @@ pub trait Cache {
         fn get_hits(&self) -> u64;
         fn get_misses(&self) -> u64;
         fn get_main_memory_accesses(&self) -> u64;
+        fn get_overflow_accesses(&self) -> u64; // for profiling accesses that span multiple lines
         fn get_meta(&self) -> &CacheMeta;
 }

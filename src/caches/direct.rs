@@ -19,6 +19,8 @@ pub struct DirectCache {
         misses: u64,
         main_memory_accesses: u64,
 
+        overflow_accesses: u64, // count accesses that span multiple lines for profiling
+
         // store a reference to lower level cache if exists
         lower: Option<Box<dyn Cache>>,
 }
@@ -33,6 +35,9 @@ impl Cache for DirectCache {
                 let index_bits = num_lines.trailing_zeros();
                 let tag_bits = 64 - offset_bits - index_bits;
 
+                println!("Initializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, index bits={}, tag bits={}", 
+                        meta.name, meta.size, meta.line_size, num_lines, offset_bits, index_bits, tag_bits);
+
                 DirectCache {
                         meta,
                         offset_bits,
@@ -43,20 +48,17 @@ impl Cache for DirectCache {
                         misses: 0,
                         main_memory_accesses: 0,
                         lower: None,
+                        overflow_accesses: 0,
                 }
         }
 
         
         // perform access
         fn access(&mut self, address: u64, size: u8) {
-                // calculate which cache lines are accessed
+                // calculate which cache lines are accessed (i.e. accesses that span across lines)
+                // end_line -1 since if we access the last byte of a line, it should still count as accessing that line
                 let start_line = address / self.meta.line_size;
-                let end_line = (address + size as u64 - 1) / self.meta.line_size;
-
-                // println!("Access addr={:#x} size={} -> start_line={} end_line={}", 
-                //         address, size, start_line, end_line);
-                // println!("  Index={} Tag={:#x}", self.get_index(address), self.get_tag(address));
-                // println!("  Target tag={:#x}", self.tags[self.get_index(address) as usize]);
+                let end_line = (address + size as u64 - 1) / self.meta.line_size; 
 
                 // access each cache line that the address spans
                 for line_addr in start_line..=end_line {
@@ -69,6 +71,9 @@ impl Cache for DirectCache {
                                 self.hits += 1;
                         } else {
                                 self.misses += 1;
+                                if end_line > start_line {
+                                        self.overflow_accesses += 1;
+                                }
 
                                 // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
                                 self.tags[index] = tag;
@@ -109,6 +114,14 @@ impl Cache for DirectCache {
                         lower_cache.get_main_memory_accesses()
                 } else {
                         self.main_memory_accesses
+                }
+        }
+
+        fn get_overflow_accesses(&self) -> u64 {
+                if let Some(lower_cache) = &self.lower {
+                        lower_cache.get_overflow_accesses() + self.overflow_accesses
+                } else {
+                        self.overflow_accesses
                 }
         }
 
