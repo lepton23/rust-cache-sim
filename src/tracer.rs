@@ -10,7 +10,7 @@ use std::arch::x86_64::*;
 #[derive(Debug, Clone, Copy)]
 pub struct TraceEntry {
         pub address: u64,
-        pub size: u8,
+        pub size: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -43,12 +43,12 @@ static HEX_LUT: HexLut = HexLut({
 // assume valid input for maximum speed
 // use get_unchecked to avoid bounds checks since we assume input is valid
 #[inline(always)]
-unsafe fn parse_decimal_u8(ptr: *const u8) -> u8 {
+unsafe fn parse_decimal_u64(ptr: *const u8) -> u64 {
         unsafe { 
                 let d0 = (*ptr.add(0)).wrapping_sub(b'0'.into());
                 let d1 = (*ptr.add(1)).wrapping_sub(b'0'.into());
                 let d2 = (*ptr.add(2)).wrapping_sub(b'0'.into());
-                d0 * 100 + d1 * 10 + d2
+                (d0 * 100 + d1 * 10 + d2).into()
         }
 }
 
@@ -87,7 +87,7 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
         let ptr = line.as_ptr();
         TraceEntry {
                 address: unsafe { parse_hex_u64(ptr.add(17)) },
-                size: unsafe { parse_decimal_u8(ptr.add(36)) },
+                size: unsafe { parse_decimal_u64(ptr.add(36)) },
         }
 }
 
@@ -210,6 +210,9 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         }
         let total_lines = offsets[chunk_line_counts.len()];
 
+        println!("Total trace entries: {}", total_lines);
+        println!("Offsets for each chunk: {:?}", offsets);
+
         // pre-allocate entire output buffer
         let mut entries = Vec::with_capacity(total_lines);
         unsafe { entries.set_len(total_lines); }
@@ -241,7 +244,7 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
                                         for line in chunk.split(|&b| b == b'\n') {
                                                 if line.len() == 39 {
                                                         unsafe {
-                                                                std::ptr::write(entries_ptr.add(offset + local_offset), parse_trace_line(line));
+                                                                std::ptr::write_volatile(entries_ptr.add(offset + local_offset), parse_trace_line(line));
                                                         }
                                                         local_offset += 1;
                                                 }

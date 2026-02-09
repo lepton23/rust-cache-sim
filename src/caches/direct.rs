@@ -13,7 +13,6 @@ pub struct DirectCache {
         
         // store tags as a vector of u64s, where each u64 represents the tag of a cache line
         tags: Vec<u64>,
-        valid: Vec<bool>,
 
         hits: u64,
         misses: u64,
@@ -43,7 +42,6 @@ impl Cache for DirectCache {
                         offset_bits,
                         index_bits,
                         tags: vec![0; num_lines as usize],
-                        valid: vec![false; num_lines as usize],
                         hits: 0,
                         misses: 0,
                         main_memory_accesses: 0,
@@ -54,40 +52,35 @@ impl Cache for DirectCache {
 
         
         // perform access
-        fn access(&mut self, address: u64, size: u8) {
+        fn access(&mut self, address: u64, size: u64) {
                 // calculate which cache lines are accessed (i.e. accesses that span across lines)
                 // end_line -1 since if we access the last byte of a line, it should still count as accessing that line
                 let start_line = address / self.meta.line_size;
-                let end_line = (address + (size as u64) - 1) / self.meta.line_size; 
+                let end_line = (address + size - 1) / self.meta.line_size; 
 
                 // access each cache line that the address spans
-                for line_addr in start_line..=end_line {
-                        let line_address = line_addr * self.meta.line_size;
+                for line_index in start_line..=end_line {
+                        let line_address = line_index * self.meta.line_size;
                         let index = self.get_index(line_address) as usize;
                         let tag = self.get_tag(line_address);
 
                         // check for hit
-                        if self.valid[index] && self.tags[index] == tag {
+                        if self.tags[index] == tag {
                                 self.hits += 1;
                         } else {
                                 self.misses += 1;
                                 if end_line > start_line {
-                                        // println!("Size of overflow access: {} bytes (spans lines {:x} to {:x})", 
-                                        //         size, 
-                                        //         start_line * self.meta.line_size, 
-                                        //         end_line * self.meta.line_size
-                                        // );
                                         self.overflow_accesses += 1;
                                 }
 
                                 // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
                                 self.tags[index] = tag;
-                                self.valid[index] = true;
 
                                 // if we have a lower level cache, access it as well
+                                // fetch entire cache line
                                 if let Some(lower_cache) = &mut self.lower {
                                         // println!("--- Checking lower cache ---");
-                                        lower_cache.access(line_address, self.meta.line_size as u8);
+                                        lower_cache.access(line_address, self.meta.line_size);
                                 } else {
                                         self.main_memory_accesses += 1;
                                 }
@@ -98,20 +91,26 @@ impl Cache for DirectCache {
         }
 
 
-        fn get_hits(&self) -> u64 {
+        fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
+
+                hits_vec.push(self.hits);
+
                 if let Some(lower_cache) = &self.lower {
-                        lower_cache.get_hits() + self.hits
-                } else {
-                        self.hits
+                        hits_vec = lower_cache.get_hits(hits_vec.clone());
                 }
+
+                hits_vec
         }
 
-        fn get_misses(&self) -> u64 {
+        fn get_misses(&self, mut misses_vec: Vec<u64>) -> Vec<u64> {
+
+                misses_vec.push(self.misses);
+
                 if let Some(lower_cache) = &self.lower {
-                        lower_cache.get_misses() + self.misses
-                } else {
-                        self.misses
+                        misses_vec = lower_cache.get_misses(misses_vec.clone());
                 }
+
+                misses_vec
         }
 
         fn get_main_memory_accesses(&self) -> u64 {

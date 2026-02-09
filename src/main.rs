@@ -24,8 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // let json_path = &args[1];
         // let trace_path = &args[2];
 
-        let json_path = "sample-inputs/direct.json";
-        let trace_path = "trace-files-ly/cactusbssn.out";
+        let json_path = "sample-inputs/l1l2l3direct.json";
+        let trace_path = "trace-files-ly/leela.out";
 
         let file_size = std::fs::metadata(trace_path)?.len();
 
@@ -88,13 +88,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cache_duration = cache_timer.stop();
 
         // get total hits and misses for all caches
-        let hits = top_cache.get_hits();
-        let misses = top_cache.get_misses();
+        let hits = top_cache.get_hits(Vec::new());
+        let misses = top_cache.get_misses(Vec::new());
         let mma = top_cache.get_main_memory_accesses();
         let overflow = top_cache.get_overflow_accesses();
 
-        println!("Total hits: {}", hits);
-        println!("Total misses: {}", misses);
+        println!("Total hits: {:?}", hits);
+        println!("Total misses: {:?}", misses);
         println!("Main memory accesses: {}", mma);
         println!("Overflow accesses (span multiple lines): {}", overflow);
 
