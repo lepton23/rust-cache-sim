@@ -35,17 +35,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Read trace file
         let entries = read_trace(trace_path)?;
 
-        if !entries.is_empty() {
-                println!("First entry: addr={:016x}, size={:03x}", 
-                        entries[0].address, 
-                        entries[0].size
-                );
-                println!("9th entry: addr={:016x}, size={:03x}", 
-                        entries[8].address, 
-                        entries[8].size
-                );
-        }
-
         let trace_duration = trace_timer.stop();
         let trace_profile = ProfileData {
                 trace_size_bytes: file_size,

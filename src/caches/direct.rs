@@ -12,7 +12,8 @@ pub struct DirectCache {
         // no need for valid bits or dirty bits since we are only simulating reads
         
         // store tags as a vector of u64s, where each u64 represents the tag of a cache line
-        tags: Vec<u64>,
+        // option used to represent valid/invalid lines
+        tags: Vec<Option<u64>>,
 
         hits: u64,
         misses: u64,
@@ -41,7 +42,7 @@ impl Cache for DirectCache {
                         meta,
                         offset_bits,
                         index_bits,
-                        tags: vec![0; num_lines as usize],
+                        tags: vec![None; num_lines as usize],
                         hits: 0,
                         misses: 0,
                         main_memory_accesses: 0,
@@ -65,7 +66,7 @@ impl Cache for DirectCache {
                         let tag = self.get_tag(line_address);
 
                         // check for hit
-                        if self.tags[index] == tag {
+                        if self.tags[index] == Some(tag) {
                                 self.hits += 1;
                         } else {
                                 self.misses += 1;
@@ -74,7 +75,7 @@ impl Cache for DirectCache {
                                 }
 
                                 // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
-                                self.tags[index] = tag;
+                                self.tags[index] = Some(tag);
 
                                 // if we have a lower level cache, access it as well
                                 // fetch entire cache line

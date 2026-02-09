@@ -92,46 +92,46 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
 }
 
 
-// Use SIMD to find newline positions for chunking the file in parallel
-#[inline(always)]
-fn find_newline_simd(data: &[u8]) -> Option<usize> {
-        // lab PCs are x86_64 - using intel i5 14500 chips which support AVX2
-        #[cfg(target_arch = "x86_64")]
-        {
-                if is_x86_feature_detected!("avx2") {
-                        unsafe { return find_newline_avx2(data); }
-                }
-        }
-        data.iter().position(|&b| b == b'\n')
-}
+// // Use SIMD to find newline positions for chunking the file in parallel
+// #[inline(always)]
+// fn find_newline_simd(data: &[u8]) -> Option<usize> {
+//         // lab PCs are x86_64 - using intel i5 14500 chips which support AVX2
+//         #[cfg(target_arch = "x86_64")]
+//         {
+//                 if is_x86_feature_detected!("avx2") {
+//                         unsafe { return find_newline_avx2(data); }
+//                 }
+//         }
+//         data.iter().position(|&b| b == b'\n')
+// }
 
-// AVX2 is an x86 extension that allows processing of 32 bytes in parallel in 256 bit wide registers using SIMD instructions.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn find_newline_avx2(data: &[u8]) -> Option<usize> {
+// // AVX2 is an x86 extension that allows processing of 32 bytes in parallel in 256 bit wide registers using SIMD instructions.
+// #[cfg(target_arch = "x86_64")]
+// #[target_feature(enable = "avx2")]
+// unsafe fn find_newline_avx2(data: &[u8]) -> Option<usize> {
 
-        // we initialise a needle register with 32 copies of the newline character
-        // the set1_epi8 function sets all 32 bytes of the register to the given value
-        let needle = _mm256_set1_epi8(b'\n' as i8);
-        let mut offset = 0;
+//         // we initialise a needle register with 32 copies of the newline character
+//         // the set1_epi8 function sets all 32 bytes of the register to the given value
+//         let needle = _mm256_set1_epi8(b'\n' as i8);
+//         let mut offset = 0;
 
-        // we load 32 bytes of the data into a register and compare it to the needle register using the cmpeq function
-        // we then use movemask to get a 32 bit mask where each bit corresponds to if the bytes were equal or not
-        // i.e. locating all newline characters in the 32 byte chunk in one instruction
-        while offset + 32 <= data.len() {
-                let chunk = unsafe { _mm256_loadu_si256(data.as_ptr().add(offset) as *const __m256i) };
-                let cmp = _mm256_cmpeq_epi8(chunk, needle);
-                let mask = _mm256_movemask_epi8(cmp);
+//         // we load 32 bytes of the data into a register and compare it to the needle register using the cmpeq function
+//         // we then use movemask to get a 32 bit mask where each bit corresponds to if the bytes were equal or not
+//         // i.e. locating all newline characters in the 32 byte chunk in one instruction
+//         while offset + 32 <= data.len() {
+//                 let chunk = unsafe { _mm256_loadu_si256(data.as_ptr().add(offset) as *const __m256i) };
+//                 let cmp = _mm256_cmpeq_epi8(chunk, needle);
+//                 let mask = _mm256_movemask_epi8(cmp);
 
-                if mask != 0 {
-                        return Some(offset + mask.trailing_zeros() as usize);
-                }
-                offset += 32;
-        }
+//                 if mask != 0 {
+//                         return Some(offset + mask.trailing_zeros() as usize);
+//                 }
+//                 offset += 32;
+//         }
 
-        // check remaining bytes
-        data[offset..].iter().position(|&b| b == b'\n').map(|pos| offset + pos)
-}
+//         // check remaining bytes
+//         data[offset..].iter().position(|&b| b == b'\n').map(|pos| offset + pos)
+// }
 
 
 pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Error>> {
@@ -149,69 +149,9 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
 
         // get number of threads and get chunk size per thread
         let num_threads = thread::available_parallelism()?.get();
-        let chunk_size = mmap.len() / num_threads;
-
-        // touch pages in parallel to warm caches before parsing
-        // (0..num_threads).into_iter().for_each(|i| {
-        //         let start = i * chunk_size;
-        //         let end = ((i + 1) * chunk_size).min(mmap.len());
-        //         let mut dummy = 0u8;
-        //         for idx in (start..end).step_by(4096) {
-        //                 unsafe { dummy ^= mmap.get_unchecked(idx) };
-        //         }
-        //         std::hint::black_box(dummy);
-        // });
-
-        // search for chunk boundaries
-        let mut chunk_starts = Vec::with_capacity(num_threads + 1);
-        chunk_starts.push(0);
-        
-        for i in 1..num_threads {
-                let pos = i * chunk_size;
-                if pos >= mmap.len() {
-                        break;
-                }
-                // Find newline, convert to absolute position, and skip past it
-                if let Some(relative_pos) = find_newline_simd(&mmap[pos..]) {
-                        chunk_starts.push(pos + relative_pos + 1);  // +1 to start after the newline
-                } else {
-                        chunk_starts.push(mmap.len());
-                        break;
-                }
-        }
-        chunk_starts.push(mmap.len());
-
-        // First pass over mmap: count lines per chunk in parallel
-        let chunk_line_counts: Vec<usize> = thread::scope(|s| {
-                let handles: Vec<_> = (0..chunk_starts.len() - 1)
-                .map(|i| {
-                        let start = chunk_starts[i];
-                        let end = chunk_starts[i + 1];
-
-                        // copy mmap reference into closure
-                        let mmap_ref = &mmap;
-
-                        s.spawn(move || {
-                                let chunk = &mmap_ref[start..end];
-                                chunk.split(|&b| b == b'\n')
-                                        .filter(|line| line.len() == 39)
-                                        .count()
-                        })
-                })
-                .collect();
-                
-                handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-
-        // calculate offsets for each chunk in the final buffer
-        let mut offsets = vec![0usize; chunk_line_counts.len() + 1];
-        for i in 0..chunk_line_counts.len() {
-                offsets[i + 1] = offsets[i] + chunk_line_counts[i];
-        }
-        let total_lines = offsets[chunk_line_counts.len()];
-
-        println!("Total trace entries: {}", total_lines);
-        println!("Offsets for each chunk: {:?}", offsets);
+        let line_width = 40; // 40 bytes per line in trace file
+        let total_lines = mmap.len() / line_width;
+        let chunk_size = ((total_lines + num_threads - 1) / num_threads);
 
         // pre-allocate entire output buffer
         let mut entries = Vec::with_capacity(total_lines);
@@ -222,43 +162,30 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
 
         // Second pass: parse directly into pre-allocated positions
         thread::scope(|s| {
-                let handles: Vec<_> = (0..chunk_starts.len() - 1)
-                        .map(|i| {
-                                let start = chunk_starts[i];
-                                let end = chunk_starts[i + 1];
-                                let offset = offsets[i];
+                for t in 0..num_threads {
+                        let start = t * chunk_size;
+                        let end = ((t + 1) * chunk_size).min(total_lines);
 
-                                // copy mmap reference into closure
-                                let mmap_ref = &mmap;
+                        // copy mmap reference into closure
+                        let mmap_ref = &mmap;
+                        
+                        // Explicitly move send_ptr into a local variable
+                        let ptr = &send_ptr;
+                        
+                        s.spawn(move || {
+                                // Extract the raw pointer from SendPtr
+                                let entries_ptr = ptr.0;
                                 
-                                // Explicitly move send_ptr into a local variable
-                                let ptr = &send_ptr;
-                                
-                                s.spawn(move || {
-                                        let chunk = &mmap_ref[start..end];
-                                        let mut local_offset = 0usize;
-
-                                        // Extract the raw pointer from SendPtr
-                                        let entries_ptr = ptr.0;
-                                        
-                                        for line in chunk.split(|&b| b == b'\n') {
-                                                if line.len() == 39 {
-                                                        unsafe {
-                                                                std::ptr::write_volatile(entries_ptr.add(offset + local_offset), parse_trace_line(line));
-                                                        }
-                                                        local_offset += 1;
-                                                }
+                                for i in start..end {
+                                        let offset = i * line_width;
+                                        let line = unsafe { mmap_ref.get_unchecked(offset..offset + line_width) };
+                                        unsafe {
+                                                std::ptr::write_volatile(entries_ptr.add(i), parse_trace_line(line));
                                         }
-                                })
-                        })
-                        .collect();
-                
-                for handle in handles {
-                        handle.join().unwrap();
+                                }
+                        });
                 }
         });
-
-
 
         Ok(entries)
 }
