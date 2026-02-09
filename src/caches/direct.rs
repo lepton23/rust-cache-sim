@@ -19,8 +19,6 @@ pub struct DirectCache {
         misses: u64,
         main_memory_accesses: u64,
 
-        overflow_accesses: u64, // count accesses that span multiple lines for profiling
-
         // store a reference to lower level cache if exists
         lower: Option<Box<dyn Cache>>,
 }
@@ -47,7 +45,6 @@ impl Cache for DirectCache {
                         misses: 0,
                         main_memory_accesses: 0,
                         lower: None,
-                        overflow_accesses: 0,
                 }
         }
 
@@ -69,13 +66,10 @@ impl Cache for DirectCache {
                         if self.tags[index] == Some(tag) {
                                 self.hits += 1;
                         } else {
-                                self.misses += 1;
-                                if end_line > start_line {
-                                        self.overflow_accesses += 1;
-                                }
 
                                 // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
                                 self.tags[index] = Some(tag);
+                                self.misses += 1;
 
                                 // if we have a lower level cache, access it as well
                                 // fetch entire cache line
@@ -122,25 +116,17 @@ impl Cache for DirectCache {
                 }
         }
 
-        fn get_overflow_accesses(&self) -> u64 {
-                if let Some(lower_cache) = &self.lower {
-                        lower_cache.get_overflow_accesses() + self.overflow_accesses
-                } else {
-                        self.overflow_accesses
-                }
-        }
-
         fn get_meta(&self) -> &CacheMeta {
                 &self.meta
         } 
+
+        // method to set lower level cache
+        fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {
+                self.lower = Some(lower_cache);
+        }
 }
 
 impl DirectCache {
-
-        // method to set lower level cache
-        pub fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {
-                self.lower = Some(lower_cache);
-        }
 
         // extract tag from address
         fn get_tag(&self, address: u64) -> u64 {
@@ -150,7 +136,7 @@ impl DirectCache {
 
         // extract index from address
         fn get_index(&self, address: u64) -> u64 {
-                let mask = (1 << self.index_bits) - 1;
+                let mask = (1u64 << self.index_bits) - 1;
                 (address >> self.offset_bits) & mask
         }
 

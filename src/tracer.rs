@@ -45,10 +45,11 @@ static HEX_LUT: HexLut = HexLut({
 #[inline(always)]
 unsafe fn parse_decimal_u64(ptr: *const u8) -> u64 {
         unsafe { 
-                let d0 = (*ptr.add(0)).wrapping_sub(b'0'.into());
-                let d1 = (*ptr.add(1)).wrapping_sub(b'0'.into());
-                let d2 = (*ptr.add(2)).wrapping_sub(b'0'.into());
-                (d0 * 100 + d1 * 10 + d2).into()
+                let d0 = (*ptr.add(0) - b'0') as u64;
+                let d1 = (*ptr.add(1) - b'0') as u64;
+                let d2 = (*ptr.add(2) - b'0') as u64;
+
+                d0 * 100 + d1 * 10 + d2
         }
 }
 
@@ -149,9 +150,9 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
 
         // get number of threads and get chunk size per thread
         let num_threads = thread::available_parallelism()?.get();
-        let line_width = 40; // 40 bytes per line in trace file
+        let line_width = 40; // 40 bytes per line in trace file (39 chars + newline)
         let total_lines = mmap.len() / line_width;
-        let chunk_size = ((total_lines + num_threads - 1) / num_threads);
+        let chunk_size = (total_lines + num_threads - 1) / num_threads;
 
         // pre-allocate entire output buffer
         let mut entries = Vec::with_capacity(total_lines);

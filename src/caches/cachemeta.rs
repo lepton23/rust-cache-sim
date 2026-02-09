@@ -1,6 +1,6 @@
 
 // use same data type for each field of struct for cache alignment
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CacheMeta {
         pub name:          String,
         pub size:           u64,

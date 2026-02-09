@@ -80,12 +80,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let hits = top_cache.get_hits(Vec::new());
         let misses = top_cache.get_misses(Vec::new());
         let mma = top_cache.get_main_memory_accesses();
-        let overflow = top_cache.get_overflow_accesses();
 
         println!("Total hits: {:?}", hits);
         println!("Total misses: {:?}", misses);
         println!("Main memory accesses: {}", mma);
-        println!("Overflow accesses (span multiple lines): {}", overflow);
+        println!("Total entries vs top-level accesses: {} : {}", entries.len(), hits[0] + misses[0]);
 
 
         // Profile data
