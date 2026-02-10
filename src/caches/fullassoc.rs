@@ -10,13 +10,12 @@ pub struct FullAssocCache {
         offset_bits: u32,
         num_lines: usize,
 
-        // cache storage
-        // no need for valid bits or dirty bits since we are only simulating reads
+        // Cache storage
         
-        // store hashmap of tags to their index in the cache
+        // Store hashmap of tags to their index in the cache
         tag_map: HashMap<u64, usize>,
 
-        // for replacement policies track order & frequency
+        // For replacement policies track order & frequency
         rr_counter: usize, // for RR
         access_order: Vec<u64>, // for LRU
         access_frequency: HashMap<u64, u64>, // for LFU
@@ -25,7 +24,7 @@ pub struct FullAssocCache {
         misses: u64,
         main_memory_accesses: u64,
 
-        // store a reference to lower level cache if exists
+        // Store a reference to lower level cache if exists
         lower: Option<Box<dyn Cache>>,
 
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
@@ -33,24 +32,21 @@ pub struct FullAssocCache {
 
 impl Cache for FullAssocCache {
         fn new(meta: CacheMeta) -> Self {
-                // calculate no of cache lines
-                let num_lines = (meta.size / meta.line_size) as u64;
+                // Calculate no of cache lines
+                let num_lines = (meta.size / meta.line_size) as usize;
 
-                // calculate bits for offset, index, and tag
+                // Calculate bits for offset, index, and tag
                 let offset_bits = meta.line_size.trailing_zeros();
-                // let tag_bits = 64 - offset_bits;
 
-                // println!("\nInitializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, tag bits={}\n", 
-                //         meta.name, meta.size, meta.line_size, num_lines, offset_bits, tag_bits);
-
+                // Initialise cache
                 FullAssocCache {
                         meta: meta.clone(),
                         offset_bits,
-                        num_lines: num_lines as usize,
-                        tag_map: HashMap::with_capacity(num_lines as usize),
+                        num_lines,
+                        tag_map: HashMap::with_capacity(num_lines),
                         rr_counter: 0,
-                        access_order: Vec::with_capacity(num_lines as usize),
-                        access_frequency: HashMap::with_capacity(num_lines as usize),
+                        access_order: Vec::with_capacity(num_lines),
+                        access_frequency: HashMap::with_capacity(num_lines),
                         hits: 0,
                         misses: 0,
                         main_memory_accesses: 0,
@@ -60,35 +56,37 @@ impl Cache for FullAssocCache {
         }
 
         
-        // perform access
+        // "Perform access"
         fn access(&mut self, address: u64, size: u64) {
-                // calculate which cache lines are accessed (i.e. accesses that span across lines)
-                // end_line -1 since if we access the last byte of a line, it should still count as accessing that line
+                // Calculate which cache lines are accessed (& check for accesses that span across lines)
+                // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
                 let start_line = address / self.meta.line_size;
                 let end_line = (address + size - 1) / self.meta.line_size; 
 
-                // access each cache line that the address spans
+                // Access each cache line that the address + size spans
                 for line_index in start_line..=end_line {
                         let line_address = line_index * self.meta.line_size;
                         let tag = self.get_tag(line_address);
 
-                        // check for hit
+                        // Check for hit
                         if self.tag_map.contains_key(&tag) {
+                                // HIT
                                 self.hits += 1;
 
                                 if self.rp == 1 {
-                                        // update access order for LRU
+                                        // Update access order for LRU
                                         self.access_order.retain(|&t| t != tag); // remove tag from current position
                                         self.access_order.push(tag); // add tag to the end to mark as most recently used
                                 }
                                 if self.rp == 2 {
-                                        // update access frequency for LFU
+                                        // Update access frequency for LFU
                                         *self.access_frequency.entry(tag).or_insert(0) += 1;
                                 }
                         } else {
+                                // MISS
                                 self.misses += 1;
 
-                                // if cache not full just insert at next available index
+                                // If cache not full just insert at next available index
                                 if self.tag_map.len() < self.num_lines {
                                         let free_index = (0..self.num_lines)
                                                 .find(|i| !self.tag_map.values().any(|&index| index == *i))
@@ -97,15 +95,17 @@ impl Cache for FullAssocCache {
                                         self.tag_map.insert(tag, free_index);
 
                                         if self.rp == 1 {
+                                                // update access order for LRU
                                                 self.access_order.push(tag);
                                         }
                                         else if self.rp == 2 {
-                                                // initialise frequency for new tag
+                                                // Initialise frequency for new tag for LFU
                                                 self.access_frequency.insert(tag, 0);
                                         }
 
+                                // CACHE FULL
                                 } else {
-                                        // cache full, need to evict line
+                                        // Cache full, need to evict line
                                         let (victim_tag, victim_index) = match self.rp {
                                                 0 => {
                                                         let idx = self.get_rr_index();
@@ -116,13 +116,18 @@ impl Cache for FullAssocCache {
                                                         (vtag, idx)
                                                 },
                                                 1 => {
-                                                        let vtag = self.access_order.remove(0); // least recently used tag at start of vec
-                                                        let idx = *self.tag_map.get(&vtag).expect("VTag not found for LRU");
+                                                        // least recently used tag at start of vec
+                                                        let vtag = self.access_order.remove(0); 
+                                                        let idx = *self.tag_map.get(&vtag)
+                                                                .expect("VTag not found for LRU");
                                                         (vtag, idx)
                                                 },
                                                 2 => {
+                                                        // least frequently used tag tiebroken by lowest index
+                                                        // tiebreak ensures deterministic behaviour
                                                         let vtag = self.get_lfu_tag();
-                                                        let idx = *self.tag_map.get(&vtag).expect("VTag nbot found for LFU");
+                                                        let idx = *self.tag_map.get(&vtag)
+                                                                .expect("VTag nbot found for LFU");
                                                         (vtag, idx)
                                                 },
                                                 _ => panic!("Invalid replacement policy"),
@@ -163,8 +168,8 @@ impl Cache for FullAssocCache {
 
         }
 
-        // recursively get hits from this cache and all lower caches
-        // format into vec
+        // Recursively get metadata on hits and misses from this cache and all lower caches
+        // Format into vec
         fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
 
                 hits_vec.push(self.hits);
@@ -176,7 +181,6 @@ impl Cache for FullAssocCache {
                 hits_vec
         }
 
-        // same as above but for misses
         fn get_misses(&self, mut misses_vec: Vec<u64>) -> Vec<u64> {
 
                 misses_vec.push(self.misses);
@@ -188,7 +192,7 @@ impl Cache for FullAssocCache {
                 misses_vec
         }
 
-        // gets main mem accesses from lowest cache
+        // Get main mem accesses from lowest cache
         fn get_main_memory_accesses(&self) -> u64 {
                 if let Some(lower_cache) = &self.lower {
                         lower_cache.get_main_memory_accesses()
@@ -197,7 +201,7 @@ impl Cache for FullAssocCache {
                 }
         }
 
-        // method to set lower level cache
+        // Set reference to lower level cache
         fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {
                 self.lower = Some(lower_cache);
         }

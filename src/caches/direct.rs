@@ -8,34 +8,31 @@ pub struct DirectCache {
         offset_bits: u32,
         index_bits: u32,
 
-        // cache storage
-        // no need for valid bits or dirty bits since we are only simulating reads
+        // Cache storage
+        // No need for valid bits or dirty bits since we are only simulating reads
         
-        // store tags as a vector of u64s, where each u64 represents the tag of a cache line
-        // option used to represent valid/invalid lines
+        // Store tags as a vector of u64s, where each u64 represents the tag of a cache line
+        // Option used to represent valid/invalid lines
         tags: Vec<Option<u64>>,
 
         hits: u64,
         misses: u64,
         main_memory_accesses: u64,
 
-        // store a reference to lower level cache if exists
+        // Store a reference to lower level cache if exists
         lower: Option<Box<dyn Cache>>,
 }
 
 impl Cache for DirectCache {
         fn new(meta: CacheMeta) -> Self {
-                // calculate no of cache lines
+                // Calculate no of cache lines
                 let num_lines = (meta.size / meta.line_size) as u64;
 
-                // calculate bits for offset, index, and tag
+                // Calculate bits for offset, index, and tag
                 let offset_bits = meta.line_size.trailing_zeros();
                 let index_bits = num_lines.trailing_zeros();
-                // let tag_bits = 64 - offset_bits - index_bits;
 
-                // println!("\nInitializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, index bits={}, tag bits={}\n", 
-                //         meta.name, meta.size, meta.line_size, num_lines, offset_bits, index_bits, tag_bits);
-
+                // Initialise cache with empty lines
                 DirectCache {
                         meta,
                         offset_bits,
@@ -49,14 +46,14 @@ impl Cache for DirectCache {
         }
 
         
-        // perform access
+        // "Perform access"
         fn access(&mut self, address: u64, size: u64) {
-                // calculate which cache lines are accessed (i.e. accesses that span across lines)
-                // end_line -1 since if we access the last byte of a line, it should still count as accessing that line
+                // Calculate which cache lines are accessed (& check for accesses that span across lines)
+                // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
                 let start_line = address / self.meta.line_size;
                 let end_line = (address + size - 1) / self.meta.line_size; 
 
-                // access each cache line that the address spans
+                // Access each cache line that the address + size spans
                 for line_index in start_line..=end_line {
                         let line_address = line_index * self.meta.line_size;
                         let index = self.get_index(line_address) as usize;
@@ -64,17 +61,19 @@ impl Cache for DirectCache {
 
                         // check for hit
                         if self.tags[index] == Some(tag) {
+                                // HIT
                                 self.hits += 1;
                         } else {
+                                // MISS
 
                                 // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
                                 self.tags[index] = Some(tag);
                                 self.misses += 1;
 
-                                // if we have a lower level cache, access it as well
-                                // fetch entire cache line
+                                // If we have a lower level cache, access it as well
+                                // if not - "Access main memory"
                                 if let Some(lower_cache) = &mut self.lower {
-                                        // println!("--- Checking lower cache ---");
+                                        // fetch entire cache line
                                         lower_cache.access(line_address, self.meta.line_size);
                                 } else {
                                         self.main_memory_accesses += 1;
@@ -86,6 +85,8 @@ impl Cache for DirectCache {
         }
 
 
+        // Recursively get metadata on hits and misses from this cache and all lower caches
+        // Format into vec
         fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
 
                 hits_vec.push(self.hits);
@@ -108,6 +109,7 @@ impl Cache for DirectCache {
                 misses_vec
         }
 
+        // Get main mem accesses from lowest cache
         fn get_main_memory_accesses(&self) -> u64 {
                 if let Some(lower_cache) = &self.lower {
                         lower_cache.get_main_memory_accesses()
@@ -116,7 +118,7 @@ impl Cache for DirectCache {
                 }
         }
 
-        // method to set lower level cache
+        // Set reference to lower level cache
         fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {
                 self.lower = Some(lower_cache);
         }

@@ -10,7 +10,12 @@ mod json_reader;
 use json_reader::read_json;
 
 mod caches;
-use caches::{CacheMeta, cache::Cache, direct::DirectCache, fullassoc::FullAssocCache};
+use caches::{
+        CacheMeta, cache::Cache, 
+        direct::DirectCache, 
+        n_way::NWayCache, 
+        fullassoc::FullAssocCache
+};
 
 /*
 CS4202 - Cache Simulation
@@ -53,9 +58,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for meta in cachemetas.into_iter().rev() {
                 let mut cache: Box<dyn Cache> = match meta.kind {
                         0 => Box::new(DirectCache::new(meta)),
-                        // 1 => Box::new(NWayCache::new(meta, 2)),
-                        // 2 => Box::new(NWayCache::new(meta, 4)),
-                        // 3 => Box::new(NWayCache::new(meta, 8)),
+                        1 => Box::new(NWayCache::new(meta)),
+                        2 => Box::new(NWayCache::new(meta)),
+                        3 => Box::new(NWayCache::new(meta)),
                         4 => Box::new(FullAssocCache::new(meta)),
                         _ => panic!("Unsupported cache type"),
                 };
@@ -70,12 +75,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut top_cache = caches.pop().expect("Need at least one cache");
 
-        // run tracefile on caches
+        // Run tracefile accesses on caches
         for entry in &entries {
                 top_cache.access(entry.address, entry.size);
         }
 
-        // get total hits and misses for all caches
+        // Get total hits and misses for all caches
         let hits = top_cache.get_hits(Vec::new());
         let misses = top_cache.get_misses(Vec::new());
         let mma = top_cache.get_main_memory_accesses();
