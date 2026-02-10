@@ -3,12 +3,18 @@ name = "p1-cachesim"
 version = "0.1.0"
 edition = "2024"
 
+[build]
+rustflag = ["-C", "target-cpu=native"]
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
 opt-level = 3
-debug = true
+debug = false
 panic = "abort"
+strip = "symbols"
+overflow-checks = false
+incremental = false
 
 [dependencies]
 libc = "0.2.180"
