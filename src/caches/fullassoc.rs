@@ -79,39 +79,73 @@ impl Cache for FullAssocCache {
                                 if self.rp == 1 {
                                         // update access order for LRU
                                         self.access_order.retain(|&t| t != tag); // remove tag from current position
-                                        self.access_order.push(tag); // add tag to the end to mark it as most recently used
+                                        self.access_order.push(tag); // add tag to the end to mark as most recently used
+                                }
+                                if self.rp == 2 {
+                                        // update access frequency for LFU
+                                        *self.access_frequency.entry(tag).or_insert(0) += 1;
                                 }
                         } else {
                                 self.misses += 1;
 
                                 // if cache not full just insert at next available index
                                 if self.tag_map.len() < self.num_lines {
-                                        for i in 0..self.num_lines {
-                                                if !self.tag_map.values().any(|&index| index == i) {
-                                                        self.tag_map.insert(tag, i);
-                                                        break;
-                                                }
+                                        let free_index = (0..self.num_lines)
+                                                .find(|i| !self.tag_map.values().any(|&index| index == *i))
+                                                .expect("No free index found");
+
+                                        self.tag_map.insert(tag, free_index);
+
+                                        if self.rp == 1 {
+                                                self.access_order.push(tag);
                                         }
-                                        self.access_order.push(tag);
-                                        self.access_frequency.insert(tag, 1);
+                                        else if self.rp == 2 {
+                                                // initialise frequency for new tag
+                                                self.access_frequency.insert(tag, 0);
+                                        }
+
                                 } else {
                                         // cache full, need to evict line
-                                        let victim_index = match self.rp {
-                                                0 => self.get_RR_index(),
-                                                1 => self.get_LRU_index(),
-                                                2 => self.get_LFU_index(),
+                                        let (victim_tag, victim_index) = match self.rp {
+                                                0 => {
+                                                        let idx = self.get_rr_index();
+                                                        let vtag = *self.tag_map.iter()
+                                                                .find(|&(_, &index)| index == idx)
+                                                                .map(|(tag, _)| tag)
+                                                                .expect("VTag not found for RR");
+                                                        (vtag, idx)
+                                                },
+                                                1 => {
+                                                        let vtag = self.access_order.remove(0); // least recently used tag at start of vec
+                                                        let idx = *self.tag_map.get(&vtag).expect("VTag not found for LRU");
+                                                        (vtag, idx)
+                                                },
+                                                2 => {
+                                                        let vtag = self.get_lfu_tag();
+                                                        let idx = *self.tag_map.get(&vtag).expect("VTag nbot found for LFU");
+                                                        (vtag, idx)
+                                                },
                                                 _ => panic!("Invalid replacement policy"),
                                         };
 
-                                        // find tag of victim line to remove from tag map
-                                        let victim_tag = *self.tag_map.iter().find(|&(_, &index)| index == victim_index).map(|(tag, _)| tag).expect("Victim tag not found");
+                                        // Remove victim from all tracking structs
 
-                                        self.tag_map.insert(tag, victim_index);
-                                        self.access_order.push(tag);
-                                        *self.access_frequency.entry(tag).or_insert(0) += 1;
-
-                                        // remove old tag from tag map
                                         self.tag_map.remove(&victim_tag);
+                                        if self.rp == 1 {
+                                                self.access_order.retain(|&t| t != victim_tag);
+                                        }
+                                        else if self.rp == 2 {
+                                                self.access_frequency.remove(&victim_tag);
+                                        }
+
+                                        // Insert new tag
+                                        self.tag_map.insert(tag, victim_index);
+                                        if self.rp == 1 {
+                                                self.access_order.push(tag);
+                                        }
+                                        else if self.rp == 2 {
+                                                self.access_frequency.insert(tag, 0);
+                                        }
                                 }
 
 
@@ -129,7 +163,8 @@ impl Cache for FullAssocCache {
 
         }
 
-
+        // recursively get hits from this cache and all lower caches
+        // format into vec
         fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
 
                 hits_vec.push(self.hits);
@@ -141,6 +176,7 @@ impl Cache for FullAssocCache {
                 hits_vec
         }
 
+        // same as above but for misses
         fn get_misses(&self, mut misses_vec: Vec<u64>) -> Vec<u64> {
 
                 misses_vec.push(self.misses);
@@ -152,6 +188,7 @@ impl Cache for FullAssocCache {
                 misses_vec
         }
 
+        // gets main mem accesses from lowest cache
         fn get_main_memory_accesses(&self) -> u64 {
                 if let Some(lower_cache) = &self.lower {
                         lower_cache.get_main_memory_accesses()
@@ -177,22 +214,22 @@ impl FullAssocCache {
                 address >> (self.offset_bits)
         }
 
-        fn get_RR_index(&mut self) -> usize {
+        fn get_rr_index(&mut self) -> usize {
                 // find the first invalid line
                 let index = self.rr_counter % self.num_lines;
                 self.rr_counter += 1;
                 index
         }
 
-        fn get_LRU_index(&mut self) -> usize {
-                // for LRU, we would need to track usage of lines, which adds complexity
-                // for simplicity, we can just use the RR index as a placeholder for LRU eviction
-                self.get_RR_index()
-        }
-
-        fn get_LFU_index(&mut self) -> usize {
-                // for LFU, we would need to track usage frequency of lines, which adds complexity
-                // for simplicity, we can just use the RR index as a placeholder for LFU eviction
-                self.get_RR_index()
+        fn get_lfu_tag(&mut self) -> u64 {
+                // least frequently used line has smallest access frequency
+                // use lower cache index as tiebreaker to ensure deterministic behaviour
+                self.access_frequency.iter()
+                        .min_by_key(|&(&tag, &freq)| {
+                                let index = *self.tag_map.get(&tag).expect("LFU tag not found");
+                                (freq, index)
+                        })
+                        .map(|(&tag, _)| tag)
+                        .expect("No LFU tags found")
         }
 }
