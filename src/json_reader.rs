@@ -11,8 +11,6 @@ pub fn read_json(path: &str) -> Result<Vec<CacheMeta>, Box<dyn std::error::Error
         let json_data = fs::read_to_string(path)?;
         let json: Value = 
                 serde_json::from_str(&json_data).expect("\nJSON formatted incorrectly.\n\n");
-        
-        println!("{:?}", json);
 
         let json_caches = json["caches"].as_array().expect("json formatting issue");
 

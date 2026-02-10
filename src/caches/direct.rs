@@ -31,10 +31,10 @@ impl Cache for DirectCache {
                 // calculate bits for offset, index, and tag
                 let offset_bits = meta.line_size.trailing_zeros();
                 let index_bits = num_lines.trailing_zeros();
-                let tag_bits = 64 - offset_bits - index_bits;
+                // let tag_bits = 64 - offset_bits - index_bits;
 
-                println!("\nInitializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, index bits={}, tag bits={}\n", 
-                        meta.name, meta.size, meta.line_size, num_lines, offset_bits, index_bits, tag_bits);
+                // println!("\nInitializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, index bits={}, tag bits={}\n", 
+                //         meta.name, meta.size, meta.line_size, num_lines, offset_bits, index_bits, tag_bits);
 
                 DirectCache {
                         meta,
@@ -115,10 +115,6 @@ impl Cache for DirectCache {
                         self.main_memory_accesses
                 }
         }
-
-        fn get_meta(&self) -> &CacheMeta {
-                &self.meta
-        } 
 
         // method to set lower level cache
         fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {

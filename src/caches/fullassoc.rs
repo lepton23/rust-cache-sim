@@ -38,10 +38,10 @@ impl Cache for FullAssocCache {
 
                 // calculate bits for offset, index, and tag
                 let offset_bits = meta.line_size.trailing_zeros();
-                let tag_bits = 64 - offset_bits;
+                // let tag_bits = 64 - offset_bits;
 
-                println!("\nInitializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, tag bits={}\n", 
-                        meta.name, meta.size, meta.line_size, num_lines, offset_bits, tag_bits);
+                // println!("\nInitializing {} cache with size={} bytes, line size={} bytes, num lines={}, offset bits={}, tag bits={}\n", 
+                //         meta.name, meta.size, meta.line_size, num_lines, offset_bits, tag_bits);
 
                 FullAssocCache {
                         meta: meta.clone(),
@@ -196,10 +196,6 @@ impl Cache for FullAssocCache {
                         self.main_memory_accesses
                 }
         }
-
-        fn get_meta(&self) -> &CacheMeta {
-                &self.meta
-        } 
 
         // method to set lower level cache
         fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {

@@ -7,4 +7,4 @@ In the root directory of this project (i.e. parent to `src`, `target`, etc.), ru
 
 To run the cache simulator, run the following command(s):
 
-`cargo run --release <json_path> <trace_path>`
+`./target/release/p1-cachesim <json_path> <trace_path>`
