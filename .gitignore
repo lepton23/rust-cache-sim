@@ -1,6 +1,9 @@
 arch-api-key.json
 arch-cli
 
+profile_results.json
+results.json
+
 trace-files/
 trace-files/*
 

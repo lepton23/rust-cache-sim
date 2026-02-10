@@ -97,6 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let json_output = serde_json::to_string_pretty(&results)?;
         println!("{}", json_output);
+        let mut output_file = std::fs::File::create("results.json")?;
+        std::io::Write::write_all(&mut output_file, json_output.as_bytes())?;
 
         Ok(())
 }
