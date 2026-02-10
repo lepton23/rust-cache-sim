@@ -25,9 +25,9 @@ pub fn read_json(path: &str) -> Result<Vec<CacheMeta>, Box<dyn std::error::Error
                 let line_size = cache["line_size"].as_u64().expect("Expected u64 for line size");
                 let kind = cache["kind"].as_str().expect("Expected str for kind");
 
-                let rp = "rr";
+                let mut rp = "rr";
                 if !cache["replacement_policy"].is_null() {
-                        let rp = cache["replacement_policy"].as_str().expect("Expected str for replacement policy");
+                        rp = cache["replacement_policy"].as_str().expect("Expected str for replacement policy");
                 }
 
                 let size_u64: u64 = size;

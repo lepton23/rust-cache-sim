@@ -11,7 +11,7 @@ mod json_reader;
 use json_reader::read_json;
 
 mod caches;
-use caches::{CacheMeta, cache::Cache, direct::DirectCache};
+use caches::{CacheMeta, cache::Cache, direct::DirectCache, fullassoc::FullAssocCache};
 
 /*
 CS4202 - Cache Simulation
@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // let json_path = &args[1];
         // let trace_path = &args[2];
 
-        let json_path = "sample-inputs/l1l2l3direct.json";
+        let json_path = "sample-inputs/full_rr.json";
         let trace_path = "trace-files-ly/leela.out";
 
         let file_size = std::fs::metadata(trace_path)?.len();
@@ -53,7 +53,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut caches: Vec<Box<dyn Cache>> = Vec::with_capacity(cachemetas.len());
 
         for meta in cachemetas.into_iter().rev() {
-                let mut cache = Box::new(DirectCache::new(meta));
+                let mut cache: Box<dyn Cache> = match meta.kind {
+                        0 => Box::new(DirectCache::new(meta)),
+                        // 1 => Box::new(NWayCache::new(meta, 2)),
+                        // 2 => Box::new(NWayCache::new(meta, 4)),
+                        // 3 => Box::new(NWayCache::new(meta, 8)),
+                        4 => Box::new(FullAssocCache::new(meta)),
+                        _ => panic!("Unsupported cache type"),
+                };
 
                 // if we have a lower level cache, connect it
                 if let Some(lower) = caches.pop() {

@@ -17,6 +17,7 @@ pub struct FullAssocCache {
         tag_map: HashMap<u64, usize>,
 
         // for replacement policies track order & frequency
+        rr_counter: usize, // for RR
         access_order: Vec<u64>, // for LRU
         access_frequency: HashMap<u64, u64>, // for LFU
 
@@ -47,6 +48,7 @@ impl Cache for FullAssocCache {
                         offset_bits,
                         num_lines: num_lines as usize,
                         tag_map: HashMap::with_capacity(num_lines as usize),
+                        rr_counter: 0,
                         access_order: Vec::with_capacity(num_lines as usize),
                         access_frequency: HashMap::with_capacity(num_lines as usize),
                         hits: 0,
@@ -82,10 +84,14 @@ impl Cache for FullAssocCache {
                         } else {
                                 self.misses += 1;
 
-                                // if cache not full just insert
+                                // if cache not full just insert at next available index
                                 if self.tag_map.len() < self.num_lines {
-                                        let index = self.tag_map.len();
-                                        self.tag_map.insert(tag, index);
+                                        for i in 0..self.num_lines {
+                                                if !self.tag_map.values().any(|&index| index == i) {
+                                                        self.tag_map.insert(tag, i);
+                                                        break;
+                                                }
+                                        }
                                         self.access_order.push(tag);
                                         self.access_frequency.insert(tag, 1);
                                 } else {
@@ -97,9 +103,15 @@ impl Cache for FullAssocCache {
                                                 _ => panic!("Invalid replacement policy"),
                                         };
 
+                                        // find tag of victim line to remove from tag map
+                                        let victim_tag = *self.tag_map.iter().find(|&(_, &index)| index == victim_index).map(|(tag, _)| tag).expect("Victim tag not found");
+
                                         self.tag_map.insert(tag, victim_index);
                                         self.access_order.push(tag);
                                         *self.access_frequency.entry(tag).or_insert(0) += 1;
+
+                                        // remove old tag from tag map
+                                        self.tag_map.remove(&victim_tag);
                                 }
 
 
@@ -165,21 +177,20 @@ impl FullAssocCache {
                 address >> (self.offset_bits)
         }
 
-        fn get_RR_index(&self) -> usize {
+        fn get_RR_index(&mut self) -> usize {
                 // find the first invalid line
-                if self.tag_map.len() < self.num_lines {
-                        return self.tag_map.len();
-                }
-                0
+                let index = self.rr_counter % self.num_lines;
+                self.rr_counter += 1;
+                index
         }
 
-        fn get_LRU_index(&self) -> usize {
+        fn get_LRU_index(&mut self) -> usize {
                 // for LRU, we would need to track usage of lines, which adds complexity
                 // for simplicity, we can just use the RR index as a placeholder for LRU eviction
                 self.get_RR_index()
         }
 
-        fn get_LFU_index(&self) -> usize {
+        fn get_LFU_index(&mut self) -> usize {
                 // for LFU, we would need to track usage frequency of lines, which adds complexity
                 // for simplicity, we can just use the RR index as a placeholder for LFU eviction
                 self.get_RR_index()
