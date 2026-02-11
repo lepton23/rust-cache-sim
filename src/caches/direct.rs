@@ -1,12 +1,13 @@
 
 use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
-
+use crate::caches::cache::AnyCache;
 
 pub struct DirectCache {
-        meta: CacheMeta,
         offset_bits: u32,
         index_bits: u32,
+        index_mask: u64,
+        line_size: u64,
 
         // Cache storage
         // No need for valid bits or dirty bits since we are only simulating reads
@@ -20,23 +21,27 @@ pub struct DirectCache {
         main_memory_accesses: u64,
 
         // Store a reference to lower level cache if exists
-        lower: Option<Box<dyn Cache>>,
+        lower: Option<Box<AnyCache>>,
 }
 
 impl Cache for DirectCache {
         fn new(meta: CacheMeta) -> Self {
                 // Calculate no of cache lines
                 let num_lines = (meta.size / meta.line_size) as u64;
+                let line_size = meta.line_size;
 
                 // Calculate bits for offset, index, and tag
                 let offset_bits = meta.line_size.trailing_zeros();
                 let index_bits = num_lines.trailing_zeros();
 
+                let index_mask = (1u64 << index_bits) - 1;
+
                 // Initialise cache with empty lines
                 DirectCache {
-                        meta,
                         offset_bits,
                         index_bits,
+                        index_mask,
+                        line_size,
                         tags: vec![None; num_lines as usize],
                         hits: 0,
                         misses: 0,
@@ -50,12 +55,12 @@ impl Cache for DirectCache {
         fn access(&mut self, address: u64, size: u64) {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)
                 // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
-                let start_line = address / self.meta.line_size;
-                let end_line = (address + size - 1) / self.meta.line_size; 
+                let start_line = address / self.line_size;
+                let end_line = (address + size - 1) / self.line_size; 
 
                 // Access each cache line that the address + size spans
                 for line_index in start_line..=end_line {
-                        let line_address = line_index * self.meta.line_size;
+                        let line_address = line_index * self.line_size;
                         let index = self.get_index(line_address) as usize;
                         let tag = self.get_tag(line_address);
 
@@ -74,7 +79,7 @@ impl Cache for DirectCache {
                                 // if not - "Access main memory"
                                 if let Some(lower_cache) = &mut self.lower {
                                         // fetch entire cache line
-                                        lower_cache.access(line_address, self.meta.line_size);
+                                        lower_cache.access(line_address, self.line_size);
                                 } else {
                                         self.main_memory_accesses += 1;
                                 }
@@ -92,7 +97,7 @@ impl Cache for DirectCache {
                 hits_vec.push(self.hits);
 
                 if let Some(lower_cache) = &self.lower {
-                        hits_vec = lower_cache.get_hits(hits_vec.clone());
+                        hits_vec = lower_cache.get_hits(hits_vec);
                 }
 
                 hits_vec
@@ -103,7 +108,7 @@ impl Cache for DirectCache {
                 misses_vec.push(self.misses);
 
                 if let Some(lower_cache) = &self.lower {
-                        misses_vec = lower_cache.get_misses(misses_vec.clone());
+                        misses_vec = lower_cache.get_misses(misses_vec);
                 }
 
                 misses_vec
@@ -119,7 +124,7 @@ impl Cache for DirectCache {
         }
 
         // Set reference to lower level cache
-        fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {
+        fn set_lower(&mut self, lower_cache: Box<AnyCache>) {
                 self.lower = Some(lower_cache);
         }
 }
@@ -127,15 +132,16 @@ impl Cache for DirectCache {
 impl DirectCache {
 
         // extract tag from address
+        #[inline(always)]
         fn get_tag(&self, address: u64) -> u64 {
                 address >> (self.offset_bits + self.index_bits)
         }
 
 
         // extract index from address
+        #[inline(always)]
         fn get_index(&self, address: u64) -> u64 {
-                let mask = (1u64 << self.index_bits) - 1;
-                (address >> self.offset_bits) & mask
+                (address >> self.offset_bits) & self.index_mask
         }
 
 }

@@ -3,8 +3,8 @@ use std::fs::File;
 use memmap2::Mmap;
 use std::thread;
 
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+// #[cfg(target_arch = "x86_64")]
+// use std::arch::x86_64::*;
 
 
 #[derive(Debug, Clone, Copy)]
@@ -134,8 +134,12 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
 //         data[offset..].iter().position(|&b| b == b'\n').map(|pos| offset + pos)
 // }
 
+const BATCH_SIZE: usize = 1 << 16;
 
-pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Error>> {
+pub fn process_trace<F>(path: &str, mut process: F) -> Result<(), Box<dyn std::error::Error>>
+where
+        F: FnMut(&[TraceEntry]),
+{
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
 
@@ -152,41 +156,55 @@ pub fn read_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Err
         let num_threads = thread::available_parallelism()?.get();
         let line_width = 40; // 40 bytes per line in trace file (39 chars + newline)
         let total_lines = mmap.len() / line_width;
-        let chunk_size = (total_lines + num_threads - 1) / num_threads;
 
-        // pre-allocate entire output buffer
-        let mut entries = Vec::with_capacity(total_lines);
-        unsafe { entries.set_len(total_lines); }
+        let mut batch = vec![TraceEntry { address: 0, size: 0 }; BATCH_SIZE];
+        let mut offset = 0;
 
-        // wrap raw pointer in SendPtr to allow sending across threads safely
-        let send_ptr = SendPtr(entries.as_mut_ptr());
 
-        // Second pass: parse directly into pre-allocated positions
-        thread::scope(|s| {
-                for t in 0..num_threads {
-                        let start = t * chunk_size;
-                        let end = ((t + 1) * chunk_size).min(total_lines);
+        while offset < total_lines{
+                let batch_end = (offset + BATCH_SIZE).min(total_lines);
+                let batch_len = batch_end - offset;
+                let chunk_size = (batch_len + num_threads - 1) / num_threads; // ceiling division
 
-                        // copy mmap reference into closure
-                        let mmap_ref = &mmap;
-                        
-                        // Explicitly move send_ptr into a local variable
-                        let ptr = &send_ptr;
-                        
-                        s.spawn(move || {
-                                // Extract the raw pointer from SendPtr
-                                let entries_ptr = ptr.0;
+                // wrap raw pointer in SendPtr to allow sending across threads safely
+                let send_ptr = SendPtr(batch.as_mut_ptr());
+
+                thread::scope(|s| {
+                        for t in 0..num_threads {
+                                let start = t * chunk_size;
+                                let end = ((t + 1) * chunk_size).min(total_lines);
                                 
-                                for i in start..end {
-                                        let offset = i * line_width;
-                                        let line = unsafe { mmap_ref.get_unchecked(offset..offset + line_width) };
-                                        unsafe {
-                                                std::ptr::write_volatile(entries_ptr.add(i), parse_trace_line(line));
-                                        }
+                                // guard to avoid spawning empty threads
+                                if start >= end {
+                                        continue; // no more lines to process
                                 }
-                        });
-                }
-        });
 
-        Ok(entries)
+                                // copy mmap reference into closure
+                                let mmap_ref = &mmap;
+                                
+                                // Explicitly move send_ptr into a local variable
+                                let ptr = &send_ptr;
+                                
+                                s.spawn(move || {
+                                        // Extract the raw pointer from SendPtr
+                                        let entries_ptr = ptr.0;
+                                        
+                                        for i in start..end {
+                                                let line_offset = (offset + i) * line_width;
+                                                let line = unsafe { 
+                                                        mmap_ref.get_unchecked(line_offset..line_offset + line_width) 
+                                                };
+                                                unsafe {
+                                                        std::ptr::write(entries_ptr.add(i), parse_trace_line(line));
+                                                }
+                                        }
+                                });
+                        }
+                });
+
+                process(&batch[..batch_len]);
+                offset = batch_end;
+        }
+
+        Ok(())
 }

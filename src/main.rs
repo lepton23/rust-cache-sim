@@ -4,7 +4,7 @@ use std::env;
 use serde::{Serialize, Deserialize};
 
 mod tracer;
-use tracer::read_trace;
+use tracer::process_trace;
 
 mod json_reader;
 use json_reader::read_json;
@@ -12,9 +12,7 @@ use json_reader::read_json;
 mod caches;
 use caches::{
         CacheMeta, cache::Cache, 
-        direct::DirectCache, 
-        n_way::NWayCache, 
-        fullassoc::FullAssocCache
+        cache::AnyCache,
 };
 
 /*
@@ -35,6 +33,7 @@ struct SimulationResults {
         main_memory_accesses: u64,
 }
 
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let args: Vec<String> = env::args().collect();
@@ -43,8 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let trace_path = &args[2];
 
 
-        // Read trace file and json file
-        let entries = read_trace(trace_path)?;
+        // Read json file
         let cachemetas: Vec<CacheMeta> = read_json(json_path)?;
 
         // Store cache names in order (top to bottom)
@@ -53,17 +51,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
 
         // Initialise caches from bottom up (lowest level first)
-        let mut caches: Vec<Box<dyn Cache>> = Vec::with_capacity(cachemetas.len());
+        let mut caches: Vec<Box<AnyCache>> = Vec::with_capacity(cachemetas.len());
 
         for meta in cachemetas.into_iter().rev() {
-                let mut cache: Box<dyn Cache> = match meta.kind {
-                        0 => Box::new(DirectCache::new(meta)),
-                        1 => Box::new(NWayCache::new(meta)),
-                        2 => Box::new(NWayCache::new(meta)),
-                        3 => Box::new(NWayCache::new(meta)),
-                        4 => Box::new(FullAssocCache::new(meta)),
-                        _ => panic!("Unsupported cache type"),
-                };
+                let mut cache: Box<AnyCache> = Box::new(AnyCache::new(meta));
 
                 // if we have a lower level cache, connect it
                 if let Some(lower) = caches.pop() {
@@ -75,10 +66,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut top_cache = caches.pop().expect("Need at least one cache");
 
-        // Run tracefile accesses on caches
-        for entry in &entries {
-                top_cache.access(entry.address, entry.size);
-        }
+        // Stream trace entries in batches directly into cache structure
+        process_trace(trace_path, |batch| {
+                for entry in batch {
+                        top_cache.access(entry.address, entry.size);
+                }
+        })?;
 
         // Get total hits and misses for all caches
         let hits = top_cache.get_hits(Vec::new());

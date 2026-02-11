@@ -1,14 +1,15 @@
 
 use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
+use crate::caches::cache::AnyCache;
 
 use std::collections::HashMap;
 
 
 pub struct FullAssocCache {
-        meta: CacheMeta,
         offset_bits: u32,
         num_lines: usize,
+        line_size: u64,
 
         // Cache storage
         
@@ -25,7 +26,7 @@ pub struct FullAssocCache {
         main_memory_accesses: u64,
 
         // Store a reference to lower level cache if exists
-        lower: Option<Box<dyn Cache>>,
+        lower: Option<Box<AnyCache>>,
 
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
 }
@@ -40,9 +41,9 @@ impl Cache for FullAssocCache {
 
                 // Initialise cache
                 FullAssocCache {
-                        meta: meta.clone(),
                         offset_bits,
                         num_lines,
+                        line_size: meta.line_size,
                         tag_map: HashMap::with_capacity(num_lines),
                         rr_counter: 0,
                         access_order: Vec::with_capacity(num_lines),
@@ -60,12 +61,12 @@ impl Cache for FullAssocCache {
         fn access(&mut self, address: u64, size: u64) {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)
                 // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
-                let start_line = address / self.meta.line_size;
-                let end_line = (address + size - 1) / self.meta.line_size; 
+                let start_line = address / self.line_size;
+                let end_line = (address + size - 1) / self.line_size; 
 
                 // Access each cache line that the address + size spans
                 for line_index in start_line..=end_line {
-                        let line_address = line_index * self.meta.line_size;
+                        let line_address = line_index * self.line_size;
                         let tag = self.get_tag(line_address);
 
                         // Check for hit
@@ -158,7 +159,7 @@ impl Cache for FullAssocCache {
                                 // fetch entire cache line
                                 if let Some(lower_cache) = &mut self.lower {
                                         // println!("--- Checking lower cache ---");
-                                        lower_cache.access(line_address, self.meta.line_size);
+                                        lower_cache.access(line_address, self.line_size);
                                 } else {
                                         self.main_memory_accesses += 1;
                                 }
@@ -175,7 +176,7 @@ impl Cache for FullAssocCache {
                 hits_vec.push(self.hits);
 
                 if let Some(lower_cache) = &self.lower {
-                        hits_vec = lower_cache.get_hits(hits_vec.clone());
+                        hits_vec = lower_cache.get_hits(hits_vec);
                 }
 
                 hits_vec
@@ -186,7 +187,7 @@ impl Cache for FullAssocCache {
                 misses_vec.push(self.misses);
 
                 if let Some(lower_cache) = &self.lower {
-                        misses_vec = lower_cache.get_misses(misses_vec.clone());
+                        misses_vec = lower_cache.get_misses(misses_vec);
                 }
 
                 misses_vec
@@ -202,7 +203,7 @@ impl Cache for FullAssocCache {
         }
 
         // Set reference to lower level cache
-        fn set_lower(&mut self, lower_cache: Box<dyn Cache>) {
+        fn set_lower(&mut self, lower_cache: Box<AnyCache>) {
                 self.lower = Some(lower_cache);
         }
 }
@@ -210,10 +211,12 @@ impl Cache for FullAssocCache {
 impl FullAssocCache {
 
         // extract tag from address
+        #[inline(always)]
         fn get_tag(&self, address: u64) -> u64 {
                 address >> (self.offset_bits)
         }
 
+        #[inline(always)]
         fn get_rr_index(&mut self) -> usize {
                 // find the first invalid line
                 let index = self.rr_counter % self.num_lines;
@@ -221,6 +224,7 @@ impl FullAssocCache {
                 index
         }
 
+        #[inline(always)]
         fn get_lfu_tag(&mut self) -> u64 {
                 // least frequently used line has smallest access frequency
                 // use lower cache index as tiebreaker to ensure deterministic behaviour
