@@ -4,16 +4,9 @@ arch-cli
 profile_results.json
 results.json
 
-trace-files/
-trace-files/*
-
-trace-files-ly
+trace-files
 sample-inputs
-sample-outputs
 
-trace-files-ly/*
-sample-inputs/*
-sample-outputs/*
 
 perf.data
 perf.data.*
