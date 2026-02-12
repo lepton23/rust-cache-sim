@@ -2,8 +2,8 @@
 use std::fs::File;
 use memmap2::Mmap;
 
-// #[cfg(target_arch = "x86_64")]
-// use std::arch::x86_64::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
 
 #[derive(Debug, Clone, Copy)]
@@ -11,12 +11,6 @@ pub struct TraceEntry {
         pub address: u64,
         pub size: u64,
 }
-
-#[derive(Copy, Clone)]
-struct SendPtr(*mut TraceEntry);
-unsafe impl Send for SendPtr {}
-unsafe impl Sync for SendPtr {}
-
 
 // static hex lookup table prepared at compile time
 // alighn to cache line size
@@ -53,7 +47,7 @@ unsafe fn parse_decimal_u64(ptr: *const u8) -> u64 {
 }
 
 #[inline(always)]
-unsafe fn parse_hex_u64(ptr: *const u8) -> u64 {
+unsafe fn parse_hex_u64_no_simd(ptr: *const u8) -> u64 {
         let lut = &HEX_LUT.0;
         // load nibbles first as its better for CPU pipelining
         unsafe {
@@ -81,6 +75,76 @@ unsafe fn parse_hex_u64(ptr: *const u8) -> u64 {
         }
 }
 
+// Use SIMD to parse lines in one go!
+// AVX2 is an x86 extension that allows processing of 32 bytes in parallel in 256 bit wide registers using SIMD instructions.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn parse_hex_u64_simd(ptr: *const u8) -> u64 {
+        // load 16 hex chars into 128 bit register
+        let input = _mm_loadu_si128(ptr as *const __m128i);
+
+        // digits: value = byte & 0x0f
+        // letters: value = (byte & 0x0f) + 9
+        // 'a' & 0x0f = 1 'A' & 0x0f = 1, so we can just grab the low nibble and add 9
+        let mask_0f = _mm_set1_epi8(0x0f); // this is an 8 bit needle which we can run over our 128 bit input
+        let low_nibbles = _mm_and_si128(input, mask_0f); // as so - grabbing the low nibble of each byte
+
+        // mask to check for letteres
+        // we can check if byte & 0x40 != 0
+        let mask_f0 = _mm_set1_epi8(0x40);
+        let is_letter = _mm_and_si128(input, mask_f0);
+
+        // Convert the 0x40 flag into a 9 offset: shift right by 6, multiply by 9
+        // is_letter bytes are 0x40 where letter and 0x00 for digit
+        // shift right by 6 to get 0x01 for letter and 0x00 for digit
+        let letter_shift = _mm_srli_epi64::<6>(is_letter);
+        // multiply by 9: (x << 3) + x
+        let letter_x8 = _mm_slli_epi64::<3>(letter_shift);
+        let letter_offset = _mm_add_epi8(letter_x8, letter_shift);
+
+        // get final nibble values
+        let nibbles = _mm_add_epi8(low_nibbles, letter_offset);
+
+        // now we have 16 4bit values in 16 bytes: [n0, n1, n2, etc]
+        // pack the nibble into bytes as so (n0<<4) | n1, (n2<<4) | n3, etc
+        let high_nibbles = _mm_slli_epi16::<4>(nibbles); // shift positions left 4
+        let high_mask = _mm_set1_epi16(0x00f0u16 as i16); // mask to keep only high nibbles after shift
+        let low_mask = _mm_set1_epi16(0x000fu16 as i16); // mask to keep only low nibbles
+        let high = _mm_and_si128(high_nibbles, high_mask);
+        let low = _mm_and_si128(nibbles, low_mask);
+
+        // shift low bytes into position as so
+        let combined = _mm_or_si128(high, _mm_srli_epi16::<8>(low));
+
+        // now we have 8 bytes in even byte positions of each 16 bit word in 16 byte address
+        // use pshufb to pack them back together
+        let shuffle = _mm_set_epi8(
+                -1, -1, -1, -1, -1, -1, -1, -1,
+                14, 12, 10, 8, 6, 4, 2, 0
+        );
+        let packed = _mm_shuffle_epi8(combined, shuffle);
+
+        // extract the final 64 bit value from cvtsi128 as u64
+        let result = _mm_cvtsi128_si64(packed) as u64;
+        
+        // result was big endian so swap bytes
+        result.swap_bytes()
+
+}
+
+#[inline(always)]
+unsafe fn parse_hex_u64(ptr: *const u8) -> u64 {
+        #[cfg(target_arch = "x86_64")]
+        {
+                if is_x86_feature_detected!("avx2") {
+                        return unsafe { parse_hex_u64_simd(ptr) };
+                }
+        }
+        unsafe { parse_hex_u64_no_simd(ptr) }
+}
+
+
 // read trace file in parallel
 #[inline(always)]
 unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
@@ -92,48 +156,8 @@ unsafe fn parse_trace_line(line: &[u8]) -> TraceEntry {
 }
 
 
-// // Use SIMD to find newline positions for chunking the file in parallel
-// #[inline(always)]
-// fn find_newline_simd(data: &[u8]) -> Option<usize> {
-//         // lab PCs are x86_64 - using intel i5 14500 chips which support AVX2
-//         #[cfg(target_arch = "x86_64")]
-//         {
-//                 if is_x86_feature_detected!("avx2") {
-//                         unsafe { return find_newline_avx2(data); }
-//                 }
-//         }
-//         data.iter().position(|&b| b == b'\n')
-// }
 
-// // AVX2 is an x86 extension that allows processing of 32 bytes in parallel in 256 bit wide registers using SIMD instructions.
-// #[cfg(target_arch = "x86_64")]
-// #[target_feature(enable = "avx2")]
-// unsafe fn find_newline_avx2(data: &[u8]) -> Option<usize> {
-
-//         // we initialise a needle register with 32 copies of the newline character
-//         // the set1_epi8 function sets all 32 bytes of the register to the given value
-//         let needle = _mm256_set1_epi8(b'\n' as i8);
-//         let mut offset = 0;
-
-//         // we load 32 bytes of the data into a register and compare it to the needle register using the cmpeq function
-//         // we then use movemask to get a 32 bit mask where each bit corresponds to if the bytes were equal or not
-//         // i.e. locating all newline characters in the 32 byte chunk in one instruction
-//         while offset + 32 <= data.len() {
-//                 let chunk = unsafe { _mm256_loadu_si256(data.as_ptr().add(offset) as *const __m256i) };
-//                 let cmp = _mm256_cmpeq_epi8(chunk, needle);
-//                 let mask = _mm256_movemask_epi8(cmp);
-
-//                 if mask != 0 {
-//                         return Some(offset + mask.trailing_zeros() as usize);
-//                 }
-//                 offset += 32;
-//         }
-
-//         // check remaining bytes
-//         data[offset..].iter().position(|&b| b == b'\n').map(|pos| offset + pos)
-// }
-
-const BATCH_SIZE: usize = 1 << 14;
+const BATCH_SIZE: usize = 1 << 15;
 
 pub fn process_trace<F>(path: &str, mut process: F) -> Result<(), Box<dyn std::error::Error>>
 where
