@@ -128,8 +128,8 @@ impl Cache for NWayCache {
         fn access(&mut self, address: u64, size: u64) {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)
                 // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
-                let start_line = address / self.line_size;
-                let end_line = (address + size - 1) / self.line_size; 
+                let start_line = address >> self.offset_bits;
+                let end_line = (address + size - 1) >> self.offset_bits; 
 
                 // Access each cache line that the address + size spans
                 for line_index in start_line..=end_line {
@@ -286,7 +286,7 @@ impl NWayCache {
         // extract set index from address
         #[inline(always)]
         fn get_set_index(&self, address: u64) -> usize {
-                ((address / self.line_size) & self.index_mask) as usize
+                ((address >> self.offset_bits) & self.index_mask) as usize
         }
 
         // extract tag from address

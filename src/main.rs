@@ -69,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Stream trace entries in batches directly into cache structure
         process_trace(trace_path, |batch| {
                 for entry in batch {
+                        let entry = unsafe { entry.assume_init() };
                         top_cache.access(entry.address, entry.size);
                 }
         })?;
