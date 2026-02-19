@@ -1,7 +1,6 @@
 
 use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
-use crate::caches::cache::AnyCache;
 
 
 #[inline]
@@ -21,7 +20,7 @@ fn unlikely(b: bool) -> bool {
 }
 
 
-pub struct DirectCache {
+pub struct DirectCache<L: Cache> {
         offset_bits: u32,
         index_bits: u32,
         index_mask: u64,
@@ -36,18 +35,17 @@ pub struct DirectCache {
 
         hits: u64,
         misses: u64,
-        main_memory_accesses: u64,
 
         // Store a reference to lower level cache if exists
-        lower: Option<Box<AnyCache>>,
+        lower: L,
 }
 
 // sentinel value to avoid using Option for tags
 const INVALID_TAG: u64 = u64::MAX;
 
 
-impl Cache for DirectCache {
-        fn new(meta: CacheMeta) -> Self {
+impl<L: Cache> DirectCache<L> {
+        pub fn new(meta: CacheMeta, lower: L) -> Self {
                 // Calculate no of cache lines
                 let num_lines = (meta.size / meta.line_size) as u64;
                 let line_size = meta.line_size;
@@ -67,13 +65,15 @@ impl Cache for DirectCache {
                         tags: vec![INVALID_TAG; num_lines as usize],
                         hits: 0,
                         misses: 0,
-                        main_memory_accesses: 0,
-                        lower: None,
+                        lower,
                 }
         }
+}
 
         
+impl<L: Cache> Cache for DirectCache<L> {
         // "Perform access"
+        #[inline(always)]
         fn access(&mut self, address: u64, size: u64) {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)
                 // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
@@ -109,13 +109,8 @@ impl Cache for DirectCache {
 
                         // If we have a lower level cache, access it as well
                         // if not - "Access main memory"
-                        if let Some(lower_cache) = &mut self.lower {
-                                // fetch entire cache line
-                                lower_cache.access(line_index << self.offset_bits, self.line_size);
-                        } else {
-                                self.main_memory_accesses += 1;
-                        }
-
+                        // fetch entire cache line
+                        self.lower.access(line_index << self.offset_bits, self.line_size);
                 }
         }
 
@@ -125,10 +120,7 @@ impl Cache for DirectCache {
         fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
 
                 hits_vec.push(self.hits);
-
-                if let Some(lower_cache) = &self.lower {
-                        hits_vec = lower_cache.get_hits(hits_vec);
-                }
+                hits_vec = self.lower.get_hits(hits_vec);
 
                 hits_vec
         }
@@ -136,25 +128,13 @@ impl Cache for DirectCache {
         fn get_misses(&self, mut misses_vec: Vec<u64>) -> Vec<u64> {
 
                 misses_vec.push(self.misses);
-
-                if let Some(lower_cache) = &self.lower {
-                        misses_vec = lower_cache.get_misses(misses_vec);
-                }
-
+                misses_vec = self.lower.get_misses(misses_vec);
+                
                 misses_vec
         }
 
         // Get main mem accesses from lowest cache
         fn get_main_memory_accesses(&self) -> u64 {
-                if let Some(lower_cache) = &self.lower {
-                        lower_cache.get_main_memory_accesses()
-                } else {
-                        self.main_memory_accesses
-                }
-        }
-
-        // Set reference to lower level cache
-        fn set_lower(&mut self, lower_cache: Box<AnyCache>) {
-                self.lower = Some(lower_cache);
+                self.lower.get_main_memory_accesses()
         }
 }

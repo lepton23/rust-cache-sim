@@ -1,7 +1,8 @@
 
 use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
-use crate::caches::cache::AnyCache;
+
+use rustc_hash::FxHashMap;
 
 #[inline]
 #[cold]
@@ -20,7 +21,7 @@ fn unlikely(b: bool) -> bool {
 }
 
 
-pub struct FullAssocCache {
+pub struct FullAssocCache<L: Cache> {
         offset_bits: u32,
         num_lines: usize,
         line_size: u64,
@@ -30,6 +31,7 @@ pub struct FullAssocCache {
         
         // Store hashmap of tags to their index in the cache
         tags: Vec<u64>,
+        tags_map: FxHashMap<u64, usize>,
 
         // For replacement policies track order & frequency
         // use flat arrays for cache locality
@@ -40,17 +42,16 @@ pub struct FullAssocCache {
 
         hits: u64,
         misses: u64,
-        main_memory_accesses: u64,
 
         // Store a reference to lower level cache if exists
-        lower: Option<Box<AnyCache>>,
+        lower: L,
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
 }
 
 const INVALID_TAG: u64 = u64::MAX;
 
-impl Cache for FullAssocCache {
-        fn new(meta: CacheMeta) -> Self {
+impl<L: Cache> FullAssocCache<L> {
+        pub fn new(meta: CacheMeta, lower: L) -> Self {
                 // Calculate no of cache lines
                 let num_lines = (meta.size / meta.line_size) as usize;
 
@@ -64,108 +65,19 @@ impl Cache for FullAssocCache {
                         line_size: meta.line_size,
                         occupied: 0,
                         tags: vec![INVALID_TAG; num_lines],
-                        rr_counter: 0,
+                        tags_map: FxHashMap::with_capacity_and_hasher(num_lines, Default::default()),
                         global_clock: 0,
+                        rr_counter: 0,
                         lru_timestamps: vec![0; num_lines],
                         lfu_frequencies: vec![0; num_lines],
                         hits: 0,
                         misses: 0,
-                        main_memory_accesses: 0,
-                        lower: None,
+                        lower,
                         rp: meta.rp,
                 }
         }
 
-        
-        // "Perform access"
-        fn access(&mut self, address: u64, size: u64) {
-                // Calculate which cache lines are accessed (& check for accesses that span across lines)
-                // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
-                let start_line = address >> self.offset_bits;
-                let end_line = (address + size - 1) >> self.offset_bits; 
-
-                if likely(start_line == end_line) {
-                        self.access_line(start_line);
-                } else {
-                        // Access each cache line that the address + size spans
-                        for line_index in start_line..=end_line {
-                                self.access_line(line_index);
-                        }
-                }
-
-        }
-
-        #[inline(always)]
-        fn access_line(&mut self, line_index: u64) {
-                let tag = line_index;
-                
-                let mut found: Option<usize> = None;
-                for i in 0..self.num_lines {
-                        if unlikely(unsafe { *self.tags.get_unchecked(i) } == tag) {
-                                found = Some(i);
-                                break;
-                        }
-                }
-
-                if let Some(idx) = found {
-                        // HIT
-                        self.hits += 1;
-                        self.on_hit(idx);
-                } else {
-                        // MISS
-                        self.misses += 1;
-                        let victim_idx = self.find_victim();
-                        self.replace_line(victim_idx, tag);
-
-                        if let Some(lower_cache) = &mut self.lower {
-                                lower_cache.access(line_index << self.offset_bits, self.line_size);
-                        } else {
-                                self.main_memory_accesses += 1;
-                        }
-                }
-        }
-
-        // Recursively get metadata on hits and misses from this cache and all lower caches
-        // Format into vec
-        fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
-
-                hits_vec.push(self.hits);
-
-                if let Some(lower_cache) = &self.lower {
-                        hits_vec = lower_cache.get_hits(hits_vec);
-                }
-
-                hits_vec
-        }
-
-        fn get_misses(&self, mut misses_vec: Vec<u64>) -> Vec<u64> {
-
-                misses_vec.push(self.misses);
-
-                if let Some(lower_cache) = &self.lower {
-                        misses_vec = lower_cache.get_misses(misses_vec);
-                }
-
-                misses_vec
-        }
-
-        // Get main mem accesses from lowest cache
-        fn get_main_memory_accesses(&self) -> u64 {
-                if let Some(lower_cache) = &self.lower {
-                        lower_cache.get_main_memory_accesses()
-                } else {
-                        self.main_memory_accesses
-                }
-        }
-
-        // Set reference to lower level cache
-        fn set_lower(&mut self, lower_cache: Box<AnyCache>) {
-                self.lower = Some(lower_cache);
-        }
-}
-
-impl FullAssocCache {
-
+       
         #[inline(always)]
         fn on_hit(&mut self, idx: usize) {
                 match self.rp {
@@ -231,6 +143,13 @@ impl FullAssocCache {
 
         #[inline(always)]
         fn replace_line(&mut self, idx: usize, tag: u64) {
+                // on eviction, remove old tag from map
+                let old_tag = self.tags[idx];
+                if old_tag != INVALID_TAG {
+                        self.tags_map.remove(&old_tag);
+                }
+                self.tags_map.insert(tag, idx);
+                
                 unsafe { *self.tags.get_unchecked_mut(idx) = tag };
 
                 match self.rp {
@@ -246,5 +165,69 @@ impl FullAssocCache {
                         },
                         _ => unreachable!(),
                 }
+        } 
+}
+        
+impl<L: Cache> Cache for FullAssocCache<L> {
+        // "Perform access"
+        fn access(&mut self, address: u64, size: u64) {
+                // Calculate which cache lines are accessed (& check for accesses that span across lines)
+                // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
+                let start_line = address >> self.offset_bits;
+                let end_line = (address + size - 1) >> self.offset_bits; 
+
+                if likely(start_line == end_line) {
+                        self.access_line(start_line);
+                } else {
+                        // Access each cache line that the address + size spans
+                        for line_index in start_line..=end_line {
+                                self.access_line(line_index);
+                        }
+                }
+
+        }
+
+        #[inline(always)]
+        fn access_line(&mut self, line_index: u64) {
+                let tag = line_index;
+                
+                let found = self.tags_map.get(&tag).copied();
+
+                if let Some(idx) = found {
+                        // HIT
+                        self.hits += 1;
+                        self.on_hit(idx);
+                } else {
+                        // MISS
+                        self.misses += 1;
+                        let victim_idx = self.find_victim();
+                        self.replace_line(victim_idx, tag);
+
+                        self.lower.access(line_index << self.offset_bits, self.line_size);
+                }
+        }
+
+        // Recursively get metadata on hits and misses from this cache and all lower caches
+        // Format into vec
+        fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
+
+                hits_vec.push(self.hits);
+                hits_vec = self.lower.get_hits(hits_vec);
+
+                hits_vec
+        }
+
+        fn get_misses(&self, mut misses_vec: Vec<u64>) -> Vec<u64> {
+
+                misses_vec.push(self.misses);
+                misses_vec = self.lower.get_misses(misses_vec);
+                
+                misses_vec
+        }
+
+        // Get main mem accesses from lowest cache
+        fn get_main_memory_accesses(&self) -> u64 {
+                self.lower.get_main_memory_accesses()
         }
 }
+

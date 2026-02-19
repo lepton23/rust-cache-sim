@@ -1,7 +1,6 @@
 
 use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
-use crate::caches::cache::AnyCache;
 
 #[inline]
 #[cold]
@@ -78,7 +77,7 @@ impl CacheSet {
         }
 }
 
-pub struct NWayCache {
+pub struct NWayCache<L: Cache> {
         offset_bits: u32,
         index_bits: u32,
         index_mask: u64,
@@ -92,16 +91,15 @@ pub struct NWayCache {
 
         hits: u64,
         misses: u64,
-        main_memory_accesses: u64,
 
         // Store a reference to lower level cache if exists
-        lower: Option<Box<AnyCache>>,
+        lower: L,
 
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
 }
 
-impl Cache for NWayCache {
-        fn new(meta: CacheMeta) -> Self {
+impl<L: Cache> NWayCache<L> {
+        pub fn new(meta: CacheMeta, lower: L) -> Self {
 
                 let asso_num: usize = match meta.kind {
                         1 => 2,
@@ -135,12 +133,25 @@ impl Cache for NWayCache {
                         sets,
                         hits: 0,
                         misses: 0,
-                        main_memory_accesses: 0,
-                        lower: None,
+                        lower,
                         rp: meta.rp,
                 }
         }
 
+        // extract set index from address
+        #[inline(always)]
+        fn get_set_index(&self, address: u64) -> usize {
+                ((address >> self.offset_bits) & self.index_mask) as usize
+        }
+
+        // extract tag from address
+        #[inline(always)]
+        fn get_tag(&self, address: u64) -> u64 {
+                address >> (self.offset_bits + self.index_bits)
+        } 
+}
+
+impl<L: Cache> Cache for NWayCache<L> {
         // "Perform access"
         fn access(&mut self, address: u64, size: u64) -> () {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)
@@ -260,12 +271,7 @@ impl Cache for NWayCache {
                         }
 
                         // On miss, access lower-level cache if exists, otherwise "access main memory"
-                        if let Some(lower_cache) = &mut self.lower {
-                                // Fetch entire cache line
-                                lower_cache.access(line_address, self.line_size);
-                        } else {
-                                self.main_memory_accesses += 1;
-                        }
+                        self.lower.access(line_index << self.offset_bits, self.line_size);
 
                 }      
         }
@@ -275,10 +281,7 @@ impl Cache for NWayCache {
         fn get_hits(&self, mut hits_vec: Vec<u64>) -> Vec<u64> {
 
                 hits_vec.push(self.hits);
-
-                if let Some(lower_cache) = &self.lower {
-                        hits_vec = lower_cache.get_hits(hits_vec);
-                }
+                hits_vec = self.lower.get_hits(hits_vec);
 
                 hits_vec
         }
@@ -286,41 +289,13 @@ impl Cache for NWayCache {
         fn get_misses(&self, mut misses_vec: Vec<u64>) -> Vec<u64> {
 
                 misses_vec.push(self.misses);
-
-                if let Some(lower_cache) = &self.lower {
-                        misses_vec = lower_cache.get_misses(misses_vec);
-                }
+                misses_vec = self.lower.get_misses(misses_vec);
 
                 misses_vec
         }
 
         // Get main mem accesses from lowest cache
         fn get_main_memory_accesses(&self) -> u64 {
-                if let Some(lower_cache) = &self.lower {
-                        lower_cache.get_main_memory_accesses()
-                } else {
-                        self.main_memory_accesses
-                }
+                self.lower.get_main_memory_accesses()
         }
-
-        // Set reference to lower level cache
-        fn set_lower(&mut self, lower_cache: Box<AnyCache>) {
-                self.lower = Some(lower_cache);
-        }
-}
-
-impl NWayCache {
-
-        // extract set index from address
-        #[inline(always)]
-        fn get_set_index(&self, address: u64) -> usize {
-                ((address >> self.offset_bits) & self.index_mask) as usize
-        }
-
-        // extract tag from address
-        #[inline(always)]
-        fn get_tag(&self, address: u64) -> u64 {
-                address >> (self.offset_bits + self.index_bits)
-        }
-
 }
