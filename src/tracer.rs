@@ -1,7 +1,6 @@
 
 use std::fs::File;
 use memmap2::MmapOptions;
-use std::mem::MaybeUninit;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -34,18 +33,40 @@ static HEX_LUT: HexLut = HexLut({
         lut
 });
 
+
+
 // assume valid input for maximum speed
-// use get_unchecked to avoid bounds checks since we assume input is valid
 #[inline(always)]
 unsafe fn parse_decimal_u64(ptr: *const u8) -> u64 {
-        unsafe { 
-                let d0 = (*ptr.add(0) - b'0') as u64;
-                let d1 = (*ptr.add(1) - b'0') as u64;
-                let d2 = (*ptr.add(2) - b'0') as u64;
-
-                d0 * 100 + d1 * 10 + d2
-        }
+        // Load 4 bytes at once, avoid 3 separate loads
+        let chunk = unsafe { (ptr as *const u32).read_unaligned() };
+        // Extract each digit by masking and shifting
+        let d0 = ((chunk >> 0) & 0xFF).wrapping_sub(0x30) as u64;
+        let d1 = ((chunk >> 8) & 0xFF).wrapping_sub(0x30) as u64;
+        let d2 = ((chunk >> 16) & 0xFF).wrapping_sub(0x30) as u64;
+        d0 * 100 + d1 * 10 + d2
 }
+
+
+// read_unaligned since we assume input is well formed
+// uses SWAR (SIMD within a register) to parse pairs of lines
+#[inline(always)]
+unsafe fn parse_decimal_pair(ptr0: *const u8, prt1: *const u8) -> (u64, u64) {
+        // load 4 bytes from each line - only 3 used for size
+        let v0 = unsafe { (ptr0 as *const u32).read_unaligned() } as u64 & 0x00ff_ffff;
+        let v1 = unsafe { (prt1 as *const u32).read_unaligned() } as u64 & 0x00ff_ffff;
+
+        // subtract 0x30 from each byte to convert to integer, ascii is 0x30-0x39 for digits
+        let d0 = v0.wrapping_sub(0x303030);
+        let d1 = v1.wrapping_sub(0x303030);
+
+        let s0 = (d0 & 0xff) * 100 + ((d0 >> 8) & 0xff) * 10 + ((d0 >> 16) & 0xff);
+        let s1 = (d1 & 0xff) * 100 + ((d1 >> 8) & 0xff) * 10 + ((d1 >> 16) & 0xff);
+
+        (s0, s1)
+}
+
+
 
 #[inline(always)]
 unsafe fn parse_hex_u64_no_simd(ptr: *const u8) -> u64 {
@@ -75,6 +96,11 @@ unsafe fn parse_hex_u64_no_simd(ptr: *const u8) -> u64 {
                 | (n12 << 12) | (n13 << 8) | (n14 << 4) | n15
         }
 }
+
+
+
+// === TODO: OPTIMISE!!! ===
+// Check fast_hex on github and compare speeds
 
 // Use SIMD to parse lines in one go!
 // AVX2 is an x86 extension that allows processing of 32 bytes in parallel in 256 bit wide registers using SIMD instructions.
@@ -138,93 +164,65 @@ unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
 }
 
 
-const BATCH_SIZE: usize = 1 << 17;
-
 pub fn process_trace<F>(path: &str, mut process: F) -> Result<(), Box<dyn std::error::Error>>
 where
-        F: FnMut(&[MaybeUninit<TraceEntry>]),
+        F: FnMut(TraceEntry),
 {
 
         let file = File::open(path)?;
 
         // prefault all pages to avoid page faults during processing
-        let mmap = unsafe { MmapOptions::new().populate().map(&file)? };
+        let mmap = unsafe { MmapOptions::new().no_reserve_swap().populate().map(&file)? };
 
         // advise kernel of access pattern for better readahead
+        // no need for MADV_WILLNEED since populate already faults pages in
         unsafe {
                 libc::madvise(
                         mmap.as_ptr() as *mut libc::c_void,
                         mmap.len(),
-                        libc::MADV_WILLNEED | libc::MADV_SEQUENTIAL
+                        libc::MADV_SEQUENTIAL
                 );
         }
 
         let line_width = 40; // 40 bytes per line in trace file (39 chars + newline)
         let total_lines = mmap.len() / line_width;
-
-        let mut batch: Vec<MaybeUninit<TraceEntry>> = Vec::with_capacity(BATCH_SIZE);
-        unsafe { batch.set_len(BATCH_SIZE) }; // we will initialize in place, so set length to capacity
-
-        let mut offset = 0;
-        while offset < total_lines{
-                let batch_end = (offset + BATCH_SIZE).min(total_lines);
-                let batch_len = batch_end - offset;
                                         
-                // process paris of lines with dual-lane AVX2
-                let pairs = batch_len / 2;
-                for i in 0..pairs {
-                        let idx = i * 2;
-                        let line_offset0 = (offset + idx) * line_width;
-                        let line_offset1 = (offset + idx + 1) * line_width;
+        // process paris of lines with dual-lane AVX2
+        let quads = total_lines / 4;
+        for i in 0..quads {
+                let offset = (i * 4) * line_width;
 
-                        // prefetch 8 lines ahead
-                        if idx + 8 < batch_len {
-                                unsafe {
-                                        // _MM_HINT_T0 means to prefetch into all levels of cache
-                                        let future_offset0 = (offset + idx + 8) * line_width;
-                                        let future_offset1 = (offset + idx + 9) * line_width;
-                                        _mm_prefetch(mmap.as_ptr().add(future_offset0) as *const i8, _MM_HINT_T0);
-                                        _mm_prefetch(mmap.as_ptr().add(future_offset1) as *const i8, _MM_HINT_T0);
-                                }
-                        }
-                        
-                        unsafe {
-                                let ptr0 = mmap.as_ptr().add(line_offset0);
-                                let ptr1 = mmap.as_ptr().add(line_offset1);
+                // originally manually prefetched 8 lines ahead, but already using MADV_WILLNEED, so the kernel will read ahead anyway                                
+                unsafe {
+                        let ptr0 = mmap.as_ptr().add(offset);
+                        let ptr1 = mmap.as_ptr().add(offset + line_width);
+                        let ptr2 = mmap.as_ptr().add(offset + 2 * line_width);
+                        let ptr3 = mmap.as_ptr().add(offset + 3 * line_width);
 
-                                let (addr0, addr1) = parse_line_pair_simd(ptr0.add(17), ptr1.add(17));
+                        let (addr0, addr1) = parse_line_pair_simd(ptr0.add(17), ptr1.add(17));
+                        let (addr2, addr3) = parse_line_pair_simd(ptr2.add(17), ptr3.add(17));
+                        let (size0, size1) = parse_decimal_pair(ptr0.add(36), ptr1.add(36));
+                        let (size2, size3) = parse_decimal_pair(ptr2.add(36), ptr3.add(36));
 
-                                // debug_assert_eq!(addr0, parse_hex_u64_no_simd(ptr0.add(17)), 
-                                //         "SIMD mismatch at line {}, simd={:x}, no_simd={:x}", offset + idx, addr0, parse_hex_u64_no_simd(ptr0.add(17)));
-                                // debug_assert_eq!(addr1, parse_hex_u64_no_simd(ptr1.add(17)),
-                                //         "SIMD mismatch at line {}, simd={:x}, no_simd={:x}", offset + idx + 1, addr1, parse_hex_u64_no_simd(ptr1.add(17)));
+                        process(TraceEntry { address: addr0, size: size0 });
+                        process(TraceEntry { address: addr1, size: size1 });
+                        process(TraceEntry { address: addr2, size: size2 });
+                        process(TraceEntry { address: addr3, size: size3 });
 
-                                batch[idx] = MaybeUninit::new(TraceEntry {
-                                        address: addr0,
-                                        size: parse_decimal_u64(ptr0.add(36)),
-                                });
-                                batch[idx + 1] = MaybeUninit::new(TraceEntry {
-                                        address: addr1,
-                                        size: parse_decimal_u64(ptr1.add(36)),
-                                });
-                        }
                 }
-                
-                // process last line if batch_len is odd
-                if batch_len % 2 != 0 {
-                        let last = batch_len - 1;
-                        let line_offset = (offset + last) * line_width;
-                        unsafe {
-                                let ptr = mmap.as_ptr().add(line_offset);
-                                batch[last] = MaybeUninit::new(TraceEntry {
-                                        address: parse_hex_u64_no_simd(ptr.add(17)),
-                                        size: parse_decimal_u64(ptr.add(36)),
-                                });
-                        }
-                }       
-                        
-                process(&batch[..batch_len]);
-                offset = batch_end;
+
+        }
+        
+        // process last line if batch_len is odd
+        for j in (quads * 4)..total_lines {
+                let line_offset = j * line_width;
+                unsafe {
+                        let ptr = mmap.as_ptr().add(line_offset);
+                        process(TraceEntry {
+                                address: parse_hex_u64_no_simd(ptr.add(17)),
+                                size: parse_decimal_u64(ptr.add(36)),
+                        });
+                }
         }
 
         Ok(())

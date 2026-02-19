@@ -1,4 +1,3 @@
-
 use std::env;
 
 use serde::{Serialize, Deserialize};
@@ -67,11 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut top_cache = caches.pop().expect("Need at least one cache");
 
         // Stream trace entries in batches directly into cache structure
-        process_trace(trace_path, |batch| {
-                for entry in batch {
-                        let entry = unsafe { entry.assume_init() };
+        process_trace(trace_path, |entry| {
                         top_cache.access(entry.address, entry.size);
-                }
         })?;
 
         // Get total hits and misses for all caches

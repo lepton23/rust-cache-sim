@@ -6,6 +6,7 @@ use super::fullassoc::FullAssocCache;
 pub trait Cache {
         fn new(meta: CacheMeta) -> Self where Self: Sized;
         fn access(&mut self, address: u64, size: u64) -> ();
+        fn access_line(&mut self, line_index: u64) -> ();
         fn get_hits(&self, hits_vec: Vec<u64>) -> Vec<u64>;
         fn get_misses(&self, misses_vec: Vec<u64>) -> Vec<u64>;
         fn get_main_memory_accesses(&self) -> u64;
@@ -35,6 +36,14 @@ impl Cache for AnyCache {
                         AnyCache::Direct(cache) => cache.access(address, size),
                         AnyCache::NWay(cache) => cache.access(address, size),
                         AnyCache::FullAssoc(cache) => cache.access(address, size),
+                }
+        }
+
+        fn access_line(&mut self, line_index: u64) -> () {
+                match self {
+                        AnyCache::Direct(cache) => cache.access_line(line_index),
+                        AnyCache::NWay(cache) => cache.access_line(line_index),
+                        AnyCache::FullAssoc(cache) => cache.access_line(line_index),
                 }
         }
 

@@ -3,23 +3,40 @@ use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
 use crate::caches::cache::AnyCache;
 
-use std::collections::HashMap;
+#[inline]
+#[cold]
+fn cold() {}
+
+#[inline]
+fn likely(b: bool) -> bool {
+    if !b { cold() }
+    b
+}
+
+#[inline]
+fn unlikely(b: bool) -> bool {
+    if b { cold() }
+    b
+}
 
 
 pub struct FullAssocCache {
         offset_bits: u32,
         num_lines: usize,
         line_size: u64,
+        occupied: usize,
 
         // Cache storage
         
         // Store hashmap of tags to their index in the cache
-        tag_map: HashMap<u64, usize>,
+        tags: Vec<u64>,
 
         // For replacement policies track order & frequency
+        // use flat arrays for cache locality
+        global_clock: u64,
         rr_counter: usize, // for RR
-        access_order: Vec<u64>, // for LRU
-        access_frequency: HashMap<u64, u64>, // for LFU
+        lru_timestamps: Vec<u64>, // for LRU
+        lfu_frequencies: Vec<u64>, // for LFU
 
         hits: u64,
         misses: u64,
@@ -27,9 +44,10 @@ pub struct FullAssocCache {
 
         // Store a reference to lower level cache if exists
         lower: Option<Box<AnyCache>>,
-
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
 }
+
+const INVALID_TAG: u64 = u64::MAX;
 
 impl Cache for FullAssocCache {
         fn new(meta: CacheMeta) -> Self {
@@ -44,10 +62,12 @@ impl Cache for FullAssocCache {
                         offset_bits,
                         num_lines,
                         line_size: meta.line_size,
-                        tag_map: HashMap::with_capacity(num_lines),
+                        occupied: 0,
+                        tags: vec![INVALID_TAG; num_lines],
                         rr_counter: 0,
-                        access_order: Vec::with_capacity(num_lines),
-                        access_frequency: HashMap::with_capacity(num_lines),
+                        global_clock: 0,
+                        lru_timestamps: vec![0; num_lines],
+                        lfu_frequencies: vec![0; num_lines],
                         hits: 0,
                         misses: 0,
                         main_memory_accesses: 0,
@@ -64,109 +84,45 @@ impl Cache for FullAssocCache {
                 let start_line = address >> self.offset_bits;
                 let end_line = (address + size - 1) >> self.offset_bits; 
 
-                // Access each cache line that the address + size spans
-                for line_index in start_line..=end_line {
-                        let line_address = line_index * self.line_size;
-                        let tag = self.get_tag(line_address);
-
-                        // Check for hit
-                        if self.tag_map.contains_key(&tag) {
-                                // HIT
-                                self.hits += 1;
-
-                                if self.rp == 1 {
-                                        // Update access order for LRU
-                                        self.access_order.retain(|&t| t != tag); // remove tag from current position
-                                        self.access_order.push(tag); // add tag to the end to mark as most recently used
-                                }
-                                if self.rp == 2 {
-                                        // Update access frequency for LFU
-                                        *self.access_frequency.entry(tag).or_insert(0) += 1;
-                                }
-                        } else {
-                                // MISS
-                                self.misses += 1;
-
-                                // If cache not full just insert at next available index
-                                if self.tag_map.len() < self.num_lines {
-                                        let free_index = (0..self.num_lines)
-                                                .find(|i| !self.tag_map.values().any(|&index| index == *i))
-                                                .expect("No free index found");
-
-                                        self.tag_map.insert(tag, free_index);
-
-                                        if self.rp == 1 {
-                                                // update access order for LRU
-                                                self.access_order.push(tag);
-                                        }
-                                        else if self.rp == 2 {
-                                                // Initialise frequency for new tag for LFU
-                                                self.access_frequency.insert(tag, 0);
-                                        }
-
-                                // CACHE FULL
-                                } else {
-                                        // Cache full, need to evict line
-                                        let (victim_tag, victim_index) = match self.rp {
-                                                0 => {
-                                                        let idx = self.get_rr_index();
-                                                        let vtag = *self.tag_map.iter()
-                                                                .find(|&(_, &index)| index == idx)
-                                                                .map(|(tag, _)| tag)
-                                                                .expect("VTag not found for RR");
-                                                        (vtag, idx)
-                                                },
-                                                1 => {
-                                                        // least recently used tag at start of vec
-                                                        let vtag = self.access_order.remove(0); 
-                                                        let idx = *self.tag_map.get(&vtag)
-                                                                .expect("VTag not found for LRU");
-                                                        (vtag, idx)
-                                                },
-                                                2 => {
-                                                        // least frequently used tag tiebroken by lowest index
-                                                        // tiebreak ensures deterministic behaviour
-                                                        let vtag = self.get_lfu_tag();
-                                                        let idx = *self.tag_map.get(&vtag)
-                                                                .expect("VTag nbot found for LFU");
-                                                        (vtag, idx)
-                                                },
-                                                _ => panic!("Invalid replacement policy"),
-                                        };
-
-                                        // Remove victim from all tracking structs
-
-                                        self.tag_map.remove(&victim_tag);
-                                        if self.rp == 1 {
-                                                self.access_order.retain(|&t| t != victim_tag);
-                                        }
-                                        else if self.rp == 2 {
-                                                self.access_frequency.remove(&victim_tag);
-                                        }
-
-                                        // Insert new tag
-                                        self.tag_map.insert(tag, victim_index);
-                                        if self.rp == 1 {
-                                                self.access_order.push(tag);
-                                        }
-                                        else if self.rp == 2 {
-                                                self.access_frequency.insert(tag, 0);
-                                        }
-                                }
-
-
-                                // if we have a lower level cache, access it as well
-                                // fetch entire cache line
-                                if let Some(lower_cache) = &mut self.lower {
-                                        // println!("--- Checking lower cache ---");
-                                        lower_cache.access(line_address, self.line_size);
-                                } else {
-                                        self.main_memory_accesses += 1;
-                                }
-
+                if likely(start_line == end_line) {
+                        self.access_line(start_line);
+                } else {
+                        // Access each cache line that the address + size spans
+                        for line_index in start_line..=end_line {
+                                self.access_line(line_index);
                         }
                 }
 
+        }
+
+        #[inline(always)]
+        fn access_line(&mut self, line_index: u64) {
+                let tag = line_index;
+                
+                let mut found: Option<usize> = None;
+                for i in 0..self.num_lines {
+                        if unlikely(unsafe { *self.tags.get_unchecked(i) } == tag) {
+                                found = Some(i);
+                                break;
+                        }
+                }
+
+                if let Some(idx) = found {
+                        // HIT
+                        self.hits += 1;
+                        self.on_hit(idx);
+                } else {
+                        // MISS
+                        self.misses += 1;
+                        let victim_idx = self.find_victim();
+                        self.replace_line(victim_idx, tag);
+
+                        if let Some(lower_cache) = &mut self.lower {
+                                lower_cache.access(line_index << self.offset_bits, self.line_size);
+                        } else {
+                                self.main_memory_accesses += 1;
+                        }
+                }
         }
 
         // Recursively get metadata on hits and misses from this cache and all lower caches
@@ -210,30 +166,85 @@ impl Cache for FullAssocCache {
 
 impl FullAssocCache {
 
-        // extract tag from address
         #[inline(always)]
-        fn get_tag(&self, address: u64) -> u64 {
-                address >> (self.offset_bits)
+        fn on_hit(&mut self, idx: usize) {
+                match self.rp {
+                        0 => {},
+                        1 => {
+                                // LRU update access order
+                                self.global_clock += 1;
+                                unsafe { *self.lru_timestamps.get_unchecked_mut(idx) = self.global_clock };
+                        },
+                        2 => {
+                                // LFU update access frequency
+                                unsafe { *self.lfu_frequencies.get_unchecked_mut(idx) += 1 };
+                        },
+                        _ => unreachable!(),
+                }
         }
 
         #[inline(always)]
-        fn get_rr_index(&mut self) -> usize {
-                // find the first invalid line
-                let index = self.rr_counter % self.num_lines;
-                self.rr_counter += 1;
-                index
+        fn find_victim(&mut self) -> usize {
+                // if cache not full, use next empty slot
+                if self.occupied < self.num_lines {
+                        let idx = self.occupied;
+                        self.occupied += 1;
+                        return idx;
+                }
+
+                match self.rp {
+                        0 => {
+                                // RR
+                                let idx = self.rr_counter % self.num_lines;
+                                self.rr_counter += 1;
+                                idx
+                        },
+                        1 => {
+                                // LRU: find min timestamp
+                                let mut min_ts = u64::MAX;
+                                let mut min_idx = 0;
+                                for i in 0..self.num_lines {
+                                        let ts = unsafe { *self.lru_timestamps.get_unchecked(i) };
+                                        if ts < min_ts {
+                                                min_ts = ts;
+                                                min_idx = i;
+                                        }
+                                }
+                                min_idx
+                        },
+                        2 => {
+                                // LFU: find min freqeuncy, tiebreak w/ index
+                                let mut min_freq = u64::MAX;
+                                let mut min_idx = 0;
+                                for i in 0..self.num_lines {
+                                        let freq = unsafe { *self.lfu_frequencies.get_unchecked(i) };
+                                        if freq < min_freq {
+                                                min_freq = freq;
+                                                min_idx = i;
+                                        }
+                                }
+                                min_idx
+                        },
+                        _ => unreachable!(),
+                }
         }
 
         #[inline(always)]
-        fn get_lfu_tag(&mut self) -> u64 {
-                // least frequently used line has smallest access frequency
-                // use lower cache index as tiebreaker to ensure deterministic behaviour
-                self.access_frequency.iter()
-                        .min_by_key(|&(&tag, &freq)| {
-                                let index = *self.tag_map.get(&tag).expect("LFU tag not found");
-                                (freq, index)
-                        })
-                        .map(|(&tag, _)| tag)
-                        .expect("No LFU tags found")
+        fn replace_line(&mut self, idx: usize, tag: u64) {
+                unsafe { *self.tags.get_unchecked_mut(idx) = tag };
+
+                match self.rp {
+                        0 => {},
+                        1 => {
+                                // LRU update access order
+                                self.global_clock += 1;
+                                unsafe { *self.lru_timestamps.get_unchecked_mut(idx) = self.global_clock };
+                        },
+                        2 => {
+                                // LFU update access frequency
+                                unsafe { *self.lfu_frequencies.get_unchecked_mut(idx) = 0 };
+                        },
+                        _ => unreachable!(),
+                }
         }
 }

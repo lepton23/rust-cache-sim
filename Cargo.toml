@@ -3,6 +3,9 @@ name = "p1-cachesim"
 version = "0.1.0"
 edition = "2024"
 
+[unstable]
+codegen-backend = true
+
 [build]
 rustflag = ["-C", "target-cpu=native"]
 

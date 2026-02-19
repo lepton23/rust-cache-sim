@@ -3,6 +3,24 @@ use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
 use crate::caches::cache::AnyCache;
 
+
+#[inline]
+#[cold]
+fn cold() {}
+
+#[inline]
+fn likely(b: bool) -> bool {
+    if !b { cold() }
+    b
+}
+
+#[inline]
+fn unlikely(b: bool) -> bool {
+    if b { cold() }
+    b
+}
+
+
 pub struct DirectCache {
         offset_bits: u32,
         index_bits: u32,
@@ -14,7 +32,7 @@ pub struct DirectCache {
         
         // Store tags as a vector of u64s, where each u64 represents the tag of a cache line
         // Option used to represent valid/invalid lines
-        tags: Vec<Option<u64>>,
+        tags: Vec<u64>,
 
         hits: u64,
         misses: u64,
@@ -23,6 +41,10 @@ pub struct DirectCache {
         // Store a reference to lower level cache if exists
         lower: Option<Box<AnyCache>>,
 }
+
+// sentinel value to avoid using Option for tags
+const INVALID_TAG: u64 = u64::MAX;
+
 
 impl Cache for DirectCache {
         fn new(meta: CacheMeta) -> Self {
@@ -42,7 +64,7 @@ impl Cache for DirectCache {
                         index_bits,
                         index_mask,
                         line_size,
-                        tags: vec![None; num_lines as usize],
+                        tags: vec![INVALID_TAG; num_lines as usize],
                         hits: 0,
                         misses: 0,
                         main_memory_accesses: 0,
@@ -58,35 +80,43 @@ impl Cache for DirectCache {
                 let start_line = address >> self.offset_bits;
                 let end_line = (address + size - 1) >> self.offset_bits; 
 
-                // Access each cache line that the address + size spans
-                for line_index in start_line..=end_line {
-                        let line_address = line_index * self.line_size;
-                        let index = self.get_index(line_address) as usize;
-                        let tag = self.get_tag(line_address);
-
-                        // check for hit
-                        if self.tags[index] == Some(tag) {
-                                // HIT
-                                self.hits += 1;
-                        } else {
-                                // MISS
-
-                                // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
-                                self.tags[index] = Some(tag);
-                                self.misses += 1;
-
-                                // If we have a lower level cache, access it as well
-                                // if not - "Access main memory"
-                                if let Some(lower_cache) = &mut self.lower {
-                                        // fetch entire cache line
-                                        lower_cache.access(line_address, self.line_size);
-                                } else {
-                                        self.main_memory_accesses += 1;
-                                }
-
+                if likely(start_line == end_line) {
+                        self.access_line(start_line);
+                } else {
+                        // Access each cache line that the address + size spans
+                        for line_index in start_line..=end_line {
+                                self.access_line(line_index);
                         }
                 }
 
+        }
+
+        #[inline(always)]
+        fn access_line(&mut self, line_index: u64) {
+                let index = (line_index & self.index_mask) as usize;
+                let tag = line_index >> self.index_bits;
+
+                // check for hit
+                let stored_tag = unsafe { *self.tags.get_unchecked(index) };
+                if stored_tag == tag {
+                        // HIT
+                        self.hits += 1;
+                } else {
+                        // MISS
+                        // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
+                        unsafe { *self.tags.get_unchecked_mut(index) = tag };
+                        self.misses += 1;
+
+                        // If we have a lower level cache, access it as well
+                        // if not - "Access main memory"
+                        if let Some(lower_cache) = &mut self.lower {
+                                // fetch entire cache line
+                                lower_cache.access(line_index << self.offset_bits, self.line_size);
+                        } else {
+                                self.main_memory_accesses += 1;
+                        }
+
+                }
         }
 
 
@@ -127,21 +157,4 @@ impl Cache for DirectCache {
         fn set_lower(&mut self, lower_cache: Box<AnyCache>) {
                 self.lower = Some(lower_cache);
         }
-}
-
-impl DirectCache {
-
-        // extract tag from address
-        #[inline(always)]
-        fn get_tag(&self, address: u64) -> u64 {
-                address >> (self.offset_bits + self.index_bits)
-        }
-
-
-        // extract index from address
-        #[inline(always)]
-        fn get_index(&self, address: u64) -> u64 {
-                (address >> self.offset_bits) & self.index_mask
-        }
-
 }

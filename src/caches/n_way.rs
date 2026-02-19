@@ -3,19 +3,37 @@ use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
 use crate::caches::cache::AnyCache;
 
+#[inline]
+#[cold]
+fn cold() {}
+
+#[inline]
+fn likely(b: bool) -> bool {
+    if !b { cold() }
+    b
+}
+
+#[inline]
+fn unlikely(b: bool) -> bool {
+    if b { cold() }
+    b
+}
+
 
 struct CacheSet {
-        tags: [Option<u64>; 8], // tag to index in cache lines
+        tags: [u64; 8], // tag to index in cache lines
         rr_counter: usize,
         access_order: [u64; 8],
         access_order_len: u8, // how many valid tags for LRU
         access_frequency: [u64; 8],
 }
 
+const INVALID_TAG: u64 = u64::MAX;
+
 impl CacheSet {
         fn new() -> Self {
                 CacheSet {
-                        tags: [None; 8],
+                        tags: [INVALID_TAG; 8],
                         rr_counter: 0,
                         access_order: [0; 8],
                         access_order_len: 0,
@@ -123,123 +141,133 @@ impl Cache for NWayCache {
                 }
         }
 
-        
         // "Perform access"
-        fn access(&mut self, address: u64, size: u64) {
+        fn access(&mut self, address: u64, size: u64) -> () {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)
                 // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
                 let start_line = address >> self.offset_bits;
                 let end_line = (address + size - 1) >> self.offset_bits; 
 
-                // Access each cache line that the address + size spans
-                for line_index in start_line..=end_line {
-                        let line_address = line_index * self.line_size;
-                        let set_index = self.get_set_index(line_address);
-                        let tag = self.get_tag(line_address);
-
-                        let set = &mut self.sets[set_index];
-
-                        // Find tag in set
-                        let hit_index = set.tags.iter()
-                                .position(|&t| t == Some(tag));
-
-                        // Check for hit
-                        if let Some(index) = hit_index {
-                                // HIT
-                                self.hits += 1;
-
-                                if self.rp == 1 {
-                                        // Update access order for LRU
-                                        set.order_move_to_back(tag);
-                                }
-                                if self.rp == 2 {
-                                        // Update access frequency for LFU
-                                        set.access_frequency[index] += 1;
-                                }
-                        } else {
-                                // MISS
-                                self.misses += 1;
-
-                                // Find empty index
-                                let empty_index = set.tags[..self.asso_num].iter()
-                                        .position(|&t| t.is_none());
-
-                                // SET NOT FULL
-                                if let Some(free_index) = empty_index {
-                                        // Set not full, insert new tag into set
-                                        // Find first free index in set
-                                        set.tags[free_index] = Some(tag);
-
-                                        if self.rp == 1 {
-                                                // Add new tag to end of access order for LRU
-                                                set.order_push(tag);
-                                        }
-                                        else if self.rp == 2 {
-                                                // Initialise frequency for new tag
-                                                set.access_frequency[free_index] = 1;
-                                        }
-                                
-                                // SET FULL
-                                } else {
-                                        // Set full, need to evict line
-                                        // Select victim tag & index based on replacement policy
-                                        let victim_index = match self.rp {
-                                                0 => {
-                                                        let idx = (set.rr_counter as usize) % self.asso_num;
-                                                        set.rr_counter = set.rr_counter.wrapping_add(1);
-                                                        idx
-                                                },
-                                                1 => {
-                                                        // least recently used tag at start of vec
-                                                        let vtag = set.order_pop_front();
-                                                        let idx = set.tags[..self.asso_num].iter()
-                                                                .position(|&t| t == Some(vtag))
-                                                                .expect("Victim not found for LRU");
-                                                        idx
-                                                },
-                                                2 => {
-                                                        // least frequently used tag tiebroken by lowest index
-                                                        // tiebreak ensures deterministic behaviour
-                                                        let idx = set.access_frequency[..self.asso_num].iter()
-                                                                .enumerate()
-                                                                .filter(|(i, _)| set.tags[*i].is_some())
-                                                                .min_by_key(|&(ref i, &freq)| (freq, *i))
-                                                                .map(|(i, _)| i)
-                                                                .expect("No LFU victim found");
-                                                        idx
-                                                },
-                                                _ => panic!("Invalid replacement policy"),
-                                        };
-
-                                        let victim_tag = set.tags[victim_index]
-                                                .expect("Victim tag should exist");
-
-                                        // Remove victim from all tracking structs
-                                        if self.rp == 1 {
-                                                set.order_remove(victim_tag);
-                                        }
-
-                                        // Insert new tag
-                                        set.tags[victim_index] = Some(tag);
-                                        if self.rp == 1 {
-                                                set.order_push(tag);
-                                        }
-                                        else if self.rp == 2 {
-                                                set.access_frequency[victim_index] = 1;
-                                        }
-                                }
-
-                                // On miss, access lower-level cache if exists, otherwise "access main memory"
-                                if let Some(lower_cache) = &mut self.lower {
-                                        // Fetch entire cache line
-                                        lower_cache.access(line_address, self.line_size);
-                                } else {
-                                        self.main_memory_accesses += 1;
-                                }
-
+                if likely(start_line == end_line) {
+                        self.access_line(start_line);
+                } else {
+                        // Access each cache line that the address + size spans
+                        for line_index in start_line..=end_line {
+                                self.access_line(line_index);
                         }
                 }
 
+        }
+       
+        #[inline(always)]
+        fn access_line(&mut self, line_index: u64) {
+                // Calculate which cache lines are accessed (& check for accesses that span across lines)
+                // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
+                let line_address = line_index << self.offset_bits;
+                let set_index = self.get_set_index(line_address);
+                let tag = self.get_tag(line_address);
+
+
+                let set = &mut self.sets[set_index];
+
+                // Find tag in set
+                let hit_index = set.tags.iter()
+                        .position(|&t| t == tag);
+
+                // Check for hit
+                if let Some(index) = hit_index {
+                        // HIT
+                        self.hits += 1;
+
+                        if self.rp == 1 {
+                                // Update access order for LRU
+                                set.order_move_to_back(tag);
+                        }
+                        if self.rp == 2 {
+                                // Update access frequency for LFU
+                                set.access_frequency[index] += 1;
+                        }
+                } else {
+                        // MISS
+                        self.misses += 1;
+
+                        // Find empty index
+                        let empty_index = set.tags[..self.asso_num].iter()
+                                .position(|&t| t == INVALID_TAG);
+
+                        // SET NOT FULL
+                        if let Some(free_index) = empty_index {
+                                // Set not full, insert new tag into set
+                                // Find first free index in set
+                                set.tags[free_index] = tag;
+
+                                if self.rp == 1 {
+                                        // Add new tag to end of access order for LRU
+                                        set.order_push(tag);
+                                }
+                                else if self.rp == 2 {
+                                        // Initialise frequency for new tag
+                                        set.access_frequency[free_index] = 1;
+                                }
+                        
+                        // SET FULL
+                        } else {
+                                // Set full, need to evict line
+                                // Select victim tag & index based on replacement policy
+                                let victim_index = match self.rp {
+                                        0 => {
+                                                let idx = set.rr_counter % self.asso_num;
+                                                set.rr_counter = set.rr_counter.wrapping_add(1);
+                                                idx
+                                        },
+                                        1 => {
+                                                // least recently used tag at start of vec
+                                                let vtag = set.order_pop_front();
+                                                let idx = set.tags[..self.asso_num].iter()
+                                                        .position(|&t| t == vtag)
+                                                        .expect("Victim not found for LRU");
+                                                idx
+                                        },
+                                        2 => {
+                                                // least frequently used tag tiebroken by lowest index
+                                                // tiebreak ensures deterministic behaviour
+                                                let idx = set.access_frequency[..self.asso_num].iter()
+                                                        .enumerate()
+                                                        .filter(|(i, _)| set.tags[*i] != INVALID_TAG)
+                                                        .min_by_key(|&(ref i, &freq)| (freq, *i))
+                                                        .map(|(i, _)| i)
+                                                        .expect("No LFU victim found");
+                                                idx
+                                        },
+                                        _ => panic!("Invalid replacement policy"),
+                                };
+
+                                let victim_tag = set.tags[victim_index];
+
+                                // Remove victim from all tracking structs
+                                if self.rp == 1 {
+                                        set.order_remove(victim_tag);
+                                }
+
+                                // Insert new tag
+                                set.tags[victim_index] = tag;
+                                if self.rp == 1 {
+                                        set.order_push(tag);
+                                }
+                                else if self.rp == 2 {
+                                        set.access_frequency[victim_index] = 1;
+                                }
+                        }
+
+                        // On miss, access lower-level cache if exists, otherwise "access main memory"
+                        if let Some(lower_cache) = &mut self.lower {
+                                // Fetch entire cache line
+                                lower_cache.access(line_address, self.line_size);
+                        } else {
+                                self.main_memory_accesses += 1;
+                        }
+
+                }      
         }
 
         // Recursively get metadata on hits and misses from this cache and all lower caches
