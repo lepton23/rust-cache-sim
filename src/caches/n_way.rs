@@ -12,13 +12,6 @@ fn likely(b: bool) -> bool {
     b
 }
 
-#[inline]
-fn unlikely(b: bool) -> bool {
-    if b { cold() }
-    b
-}
-
-
 struct CacheSet {
         tags: [u64; 8], // tag to index in cache lines
         rr_counter: usize,
@@ -99,7 +92,7 @@ pub struct NWayCache<L: Cache> {
 }
 
 impl<L: Cache> NWayCache<L> {
-        pub fn new(meta: CacheMeta, lower: L) -> Self {
+        pub fn new(meta: &CacheMeta, lower: L) -> Self {
 
                 let asso_num: usize = match meta.kind {
                         1 => 2,
@@ -108,12 +101,12 @@ impl<L: Cache> NWayCache<L> {
                         _ => panic!("Invalid cache kind for NWayCache"),
                 };
 
+                let offset_bits = meta.line_size.trailing_zeros();
                 // Calculate no. of cache lines & no. of sets
-                let num_lines = (meta.size / meta.line_size) as usize;
+                let num_lines = (meta.size >> offset_bits) as usize;
                 let num_sets = num_lines / asso_num;
 
                 // Calculate bits for offset, index, and tag
-                let offset_bits = meta.line_size.trailing_zeros();
                 let index_bits = (num_sets as u64).trailing_zeros();
 
                 let index_mask = (1u64 << index_bits) - 1;
@@ -153,7 +146,7 @@ impl<L: Cache> NWayCache<L> {
 
 impl<L: Cache> Cache for NWayCache<L> {
         // "Perform access"
-        fn access(&mut self, address: u64, size: u64) -> () {
+        fn access(&mut self, address: u64, size: u64) {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)
                 // end_line has -1 since if we access the last byte of a line, it should still count as accessing that line
                 let start_line = address >> self.offset_bits;
@@ -234,21 +227,19 @@ impl<L: Cache> Cache for NWayCache<L> {
                                         1 => {
                                                 // least recently used tag at start of vec
                                                 let vtag = set.order_pop_front();
-                                                let idx = set.tags[..self.asso_num].iter()
+                                                set.tags[..self.asso_num].iter()
                                                         .position(|&t| t == vtag)
-                                                        .expect("Victim not found for LRU");
-                                                idx
+                                                        .expect("Victim not found for LRU")
                                         },
                                         2 => {
                                                 // least frequently used tag tiebroken by lowest index
                                                 // tiebreak ensures deterministic behaviour
-                                                let idx = set.access_frequency[..self.asso_num].iter()
+                                                set.access_frequency[..self.asso_num].iter()
                                                         .enumerate()
                                                         .filter(|(i, _)| set.tags[*i] != INVALID_TAG)
                                                         .min_by_key(|&(ref i, &freq)| (freq, *i))
                                                         .map(|(i, _)| i)
-                                                        .expect("No LFU victim found");
-                                                idx
+                                                        .expect("No LFU victim found")
                                         },
                                         _ => panic!("Invalid replacement policy"),
                                 };

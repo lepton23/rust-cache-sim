@@ -1,6 +1,6 @@
 pub trait Cache {
-        fn access(&mut self, address: u64, size: u64) -> ();
-        fn access_line(&mut self, line_index: u64) -> ();
+        fn access(&mut self, address: u64, size: u64);
+        fn access_line(&mut self, line_index: u64);
         fn get_hits(&self, hits_vec: Vec<u64>) -> Vec<u64>;
         fn get_misses(&self, misses_vec: Vec<u64>) -> Vec<u64>;
         fn get_main_memory_accesses(&self) -> u64;
@@ -18,11 +18,11 @@ impl MainMemory {
 }
 
 impl Cache for MainMemory {
-        fn access(&mut self, _address: u64, _size: u64) -> () {
+        fn access(&mut self, _address: u64, _size: u64) {
                 self.accesses += 1;
         }
 
-        fn access_line(&mut self, _line_index: u64) -> () {
+        fn access_line(&mut self, _line_index: u64) {
                 self.accesses += 1;
         }
 

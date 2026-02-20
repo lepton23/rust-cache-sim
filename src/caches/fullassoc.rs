@@ -3,6 +3,7 @@ use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
 
 use rustc_hash::FxHashMap;
+use rustc_hash::FxBuildHasher;
 
 #[inline]
 #[cold]
@@ -13,13 +14,6 @@ fn likely(b: bool) -> bool {
     if !b { cold() }
     b
 }
-
-#[inline]
-fn unlikely(b: bool) -> bool {
-    if b { cold() }
-    b
-}
-
 
 pub struct FullAssocCache<L: Cache> {
         offset_bits: u32,
@@ -51,7 +45,7 @@ pub struct FullAssocCache<L: Cache> {
 const INVALID_TAG: u64 = u64::MAX;
 
 impl<L: Cache> FullAssocCache<L> {
-        pub fn new(meta: CacheMeta, lower: L) -> Self {
+        pub fn new(meta: &CacheMeta, lower: L) -> Self {
                 // Calculate no of cache lines
                 let num_lines = (meta.size / meta.line_size) as usize;
 
@@ -65,7 +59,7 @@ impl<L: Cache> FullAssocCache<L> {
                         line_size: meta.line_size,
                         occupied: 0,
                         tags: vec![INVALID_TAG; num_lines],
-                        tags_map: FxHashMap::with_capacity_and_hasher(num_lines, Default::default()),
+                        tags_map: FxHashMap::with_capacity_and_hasher(num_lines, FxBuildHasher),
                         global_clock: 0,
                         rr_counter: 0,
                         lru_timestamps: vec![0; num_lines],

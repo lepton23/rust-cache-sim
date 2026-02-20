@@ -39,11 +39,11 @@ static HEX_LUT: HexLut = HexLut({
 #[inline(always)]
 unsafe fn parse_decimal_u64(ptr: *const u8) -> u64 {
         // Load 4 bytes at once, avoid 3 separate loads
-        let chunk = unsafe { (ptr as *const u32).read_unaligned() };
+        let chunk = unsafe { (ptr.cast::<u32>()).read_unaligned() };
         // Extract each digit by masking and shifting
-        let d0 = ((chunk >> 0) & 0xFF).wrapping_sub(0x30) as u64;
-        let d1 = ((chunk >> 8) & 0xFF).wrapping_sub(0x30) as u64;
-        let d2 = ((chunk >> 16) & 0xFF).wrapping_sub(0x30) as u64;
+        let d0 = u64::from((chunk & 0xFF).wrapping_sub(0x30));
+        let d1 = u64::from(((chunk >> 8) & 0xFF).wrapping_sub(0x30));
+        let d2 = u64::from(((chunk >> 16) & 0xFF).wrapping_sub(0x30));
         d0 * 100 + d1 * 10 + d2
 }
 
@@ -53,12 +53,12 @@ unsafe fn parse_decimal_u64(ptr: *const u8) -> u64 {
 #[inline(always)]
 unsafe fn parse_decimal_pair(ptr0: *const u8, prt1: *const u8) -> (u64, u64) {
         // load 4 bytes from each line - only 3 used for size
-        let v0 = unsafe { (ptr0 as *const u32).read_unaligned() } as u64 & 0x00ff_ffff;
-        let v1 = unsafe { (prt1 as *const u32).read_unaligned() } as u64 & 0x00ff_ffff;
+        let v0 = u64::from(unsafe { (ptr0.cast::<u32>()).read_unaligned() }) & 0x00ff_ffff;
+        let v1 = u64::from(unsafe { (prt1.cast::<u32>()).read_unaligned() }) & 0x00ff_ffff;
 
         // subtract 0x30 from each byte to convert to integer, ascii is 0x30-0x39 for digits
-        let d0 = v0.wrapping_sub(0x303030);
-        let d1 = v1.wrapping_sub(0x303030);
+        let d0 = v0.wrapping_sub(0x0030_3030);
+        let d1 = v1.wrapping_sub(0x0030_3030);
 
         let s0 = (d0 & 0xff) * 100 + ((d0 >> 8) & 0xff) * 10 + ((d0 >> 16) & 0xff);
         let s1 = (d1 & 0xff) * 100 + ((d1 >> 8) & 0xff) * 10 + ((d1 >> 16) & 0xff);
@@ -73,22 +73,22 @@ unsafe fn parse_hex_u64_no_simd(ptr: *const u8) -> u64 {
         let lut = &HEX_LUT.0;
         // load nibbles first as its better for CPU pipelining
         unsafe {
-                let n0 = *lut.get_unchecked(*ptr.add(0) as usize) as u64;
-                let n1 = *lut.get_unchecked(*ptr.add(1) as usize) as u64;
-                let n2 = *lut.get_unchecked(*ptr.add(2) as usize) as u64;
-                let n3 = *lut.get_unchecked(*ptr.add(3) as usize) as u64;
-                let n4 = *lut.get_unchecked(*ptr.add(4) as usize) as u64;
-                let n5 = *lut.get_unchecked(*ptr.add(5) as usize) as u64;
-                let n6 = *lut.get_unchecked(*ptr.add(6) as usize) as u64;
-                let n7 = *lut.get_unchecked(*ptr.add(7) as usize) as u64;
-                let n8 = *lut.get_unchecked(*ptr.add(8) as usize) as u64;
-                let n9 = *lut.get_unchecked(*ptr.add(9) as usize) as u64;
-                let n10 = *lut.get_unchecked(*ptr.add(10) as usize) as u64;
-                let n11 = *lut.get_unchecked(*ptr.add(11) as usize) as u64;
-                let n12 = *lut.get_unchecked(*ptr.add(12) as usize) as u64;
-                let n13 = *lut.get_unchecked(*ptr.add(13) as usize) as u64;
-                let n14 = *lut.get_unchecked(*ptr.add(14) as usize) as u64;
-                let n15 = *lut.get_unchecked(*ptr.add(15) as usize) as u64;
+                let n0 = u64::from(*lut.get_unchecked(*ptr.add(0) as usize));
+                let n1 = u64::from(*lut.get_unchecked(*ptr.add(1) as usize));
+                let n2 = u64::from(*lut.get_unchecked(*ptr.add(2) as usize));
+                let n3 = u64::from(*lut.get_unchecked(*ptr.add(3) as usize));
+                let n4 = u64::from(*lut.get_unchecked(*ptr.add(4) as usize));
+                let n5 = u64::from(*lut.get_unchecked(*ptr.add(5) as usize));
+                let n6 = u64::from(*lut.get_unchecked(*ptr.add(6) as usize));
+                let n7 = u64::from(*lut.get_unchecked(*ptr.add(7) as usize));
+                let n8 = u64::from(*lut.get_unchecked(*ptr.add(8) as usize));
+                let n9 = u64::from(*lut.get_unchecked(*ptr.add(9) as usize));
+                let n10 = u64::from(*lut.get_unchecked(*ptr.add(10) as usize));
+                let n11 = u64::from(*lut.get_unchecked(*ptr.add(11) as usize));
+                let n12 = u64::from(*lut.get_unchecked(*ptr.add(12) as usize));
+                let n13 = u64::from(*lut.get_unchecked(*ptr.add(13) as usize));
+                let n14 = u64::from(*lut.get_unchecked(*ptr.add(14) as usize));
+                let n15 = u64::from(*lut.get_unchecked(*ptr.add(15) as usize));
                 
                 (n0 << 60) | (n1 << 56) | (n2 << 52) | (n3 << 48)
                 | (n4 << 44) | (n5 << 40) | (n6 << 36) | (n7 << 32)
@@ -109,8 +109,8 @@ unsafe fn parse_hex_u64_no_simd(ptr: *const u8) -> u64 {
 #[inline]
 unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
         // load 16 hex chars into 128 bit register for each line
-        let lo = unsafe { _mm_loadu_si128(ptr0 as *const __m128i) };
-        let hi = unsafe { _mm_loadu_si128(ptr1 as *const __m128i) };
+        let lo = unsafe { _mm_loadu_si128(ptr0.cast::<__m128i>()) };
+        let hi = unsafe { _mm_loadu_si128(ptr1.cast::<__m128i>()) };
         let input = _mm256_set_m128i(hi, lo); // combine into 256 bit register
 
         // extract low nibble of each byte
@@ -120,7 +120,7 @@ unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
         // digits: 0-9: 0x30 -> 0x39
         // letters: a-f: 0x61 -> 0x66, A-F: 0x41 -> 0x46
         // so if byte > 0x39, its a letter and needs +9 offset        
-        let mask_39 = _mm256_set1_epi8(0x39u8 as i8);
+        let mask_39 = _mm256_set1_epi8(0x39u8.cast_signed());
         let is_letter = _mm256_cmpgt_epi8(input, mask_39);
 
         // add 9 to letter nibbles to convert from 0-5 to 10-15
@@ -132,10 +132,10 @@ unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
 
         // now we have nibbles in an interleaved format - need to reorder them with some shifting and masking
         let evens_shifted = _mm256_slli_epi16::<4>(nibbles);
-        let evens_mask = _mm256_set1_epi16(0x00f0u16 as i16);
+        let evens_mask = _mm256_set1_epi16(0x00f0u16.cast_signed());
         let evens = _mm256_and_si256(evens_shifted, evens_mask);
 
-        let odds_mask = _mm256_set1_epi16(0xff00u16 as i16);
+        let odds_mask = _mm256_set1_epi16(0xff00u16.cast_signed());
         let odds = _mm256_and_si256(nibbles, odds_mask);
         let odds_shifted = _mm256_srli_epi16::<8>(odds);
 
@@ -156,8 +156,8 @@ unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
         let lane0 = _mm256_castsi256_si128(packed);
         let lane1 = _mm256_extracti128_si256::<1>(packed);
 
-        let result0 = (_mm_cvtsi128_si64(lane0) as u64).swap_bytes(); 
-        let result1 = (_mm_cvtsi128_si64(lane1) as u64).swap_bytes();
+        let result0 = (_mm_cvtsi128_si64(lane0).cast_unsigned()).swap_bytes(); 
+        let result1 = (_mm_cvtsi128_si64(lane1).cast_unsigned()).swap_bytes();
         
         // return both results
         (result0, result1)

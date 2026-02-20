@@ -41,9 +41,9 @@ struct SimulationResults {
 macro_rules! dispatch {
         ($meta:expr, $lower:expr, $body:expr) => {
                 match $meta.kind {
-                        0 => { let cache = DirectCache::new($meta.clone(), $lower); $body(cache) }
-                        1 | 2 | 3 => { let cache = NWayCache::new($meta.clone(), $lower); $body(cache) }
-                        4 => { let cache = FullAssocCache::new($meta.clone(), $lower); $body(cache) }
+                        0 => { let cache = DirectCache::new(&$meta.clone(), $lower); $body(cache) }
+                        1..=3 => { let cache = NWayCache::new(&$meta.clone(), $lower); $body(cache) }
+                        4 => { let cache = FullAssocCache::new(&$meta.clone(), $lower); $body(cache) }
                         _ => panic!("Unsupported cache type"),
                 }
         };
@@ -79,9 +79,10 @@ fn run<C: Cache>(
         };
 
         let json_output = serde_json::to_string_pretty(&results)?;
-        println!("{}", json_output);
-        let mut output_file = std::fs::File::create("results.json")?;
-        std::io::Write::write_all(&mut output_file, json_output.as_bytes())?;
+        println!("{json_output}");
+
+        // let mut output_file = std::fs::File::create("results.json")?;
+        // std::io::Write::write_all(&mut output_file, json_output.as_bytes())?;
 
         Ok(())        
 }
@@ -117,18 +118,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match cachemetas.len() {
                 1 => {
-                        dispatch!(&cachemetas[0], mem, |mut top| run(&mut top, tp, cn));
+                        let _ = dispatch!(&cachemetas[0], mem, |mut top| run(&mut top, tp, cn));
                 }
                 2 => {
-                        dispatch!(&cachemetas[1], mem, |l2| {
-                                dispatch!(&cachemetas[0], l2, |mut top| run(&mut top, tp, cn))
+                        let _ = dispatch!(&cachemetas[1], mem, |l2| {
+                                        dispatch!(&cachemetas[0], l2, |mut top| run(&mut top, tp, cn))
                         });
                 }
                 3 => {
-                        dispatch!(&cachemetas[2], mem, |l3| {
-                                dispatch!(&cachemetas[1], l3, |l2| {
-                                        dispatch!(&cachemetas[0], l2, |mut top| run(&mut top, tp, cn))
-                                })
+                        let _ = dispatch!(&cachemetas[2], mem, |l3| {
+                                        dispatch!(&cachemetas[1], l3, |l2| {
+                                                dispatch!(&cachemetas[0], l2, |mut top| run(&mut top, tp, cn))
+                                        })
                         });
                 }
                 _ => panic!("Max 3 cache levels supported"),

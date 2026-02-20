@@ -13,13 +13,6 @@ fn likely(b: bool) -> bool {
     b
 }
 
-#[inline]
-fn unlikely(b: bool) -> bool {
-    if b { cold() }
-    b
-}
-
-
 pub struct DirectCache<L: Cache> {
         offset_bits: u32,
         index_bits: u32,
@@ -45,13 +38,13 @@ const INVALID_TAG: u64 = u64::MAX;
 
 
 impl<L: Cache> DirectCache<L> {
-        pub fn new(meta: CacheMeta, lower: L) -> Self {
-                // Calculate no of cache lines
-                let num_lines = (meta.size / meta.line_size) as u64;
-                let line_size = meta.line_size;
-
+        pub fn new(meta: &CacheMeta, lower: L) -> Self {
                 // Calculate bits for offset, index, and tag
                 let offset_bits = meta.line_size.trailing_zeros();
+                 // Calculate no of cache lines
+                let num_lines = meta.size >> offset_bits;
+                let line_size = meta.line_size;
+
                 let index_bits = num_lines.trailing_zeros();
 
                 let index_mask = (1u64 << index_bits) - 1;
@@ -80,6 +73,7 @@ impl<L: Cache> Cache for DirectCache<L> {
                 let start_line = address >> self.offset_bits;
                 let end_line = (address + size - 1) >> self.offset_bits; 
 
+                // fast route for accesses that only touch 1 line
                 if likely(start_line == end_line) {
                         self.access_line(start_line);
                 } else {
@@ -98,6 +92,7 @@ impl<L: Cache> Cache for DirectCache<L> {
 
                 // check for hit
                 let stored_tag = unsafe { *self.tags.get_unchecked(index) };
+                // fast route for hits
                 if likely(stored_tag == tag) {
                         // HIT
                         self.hits += 1;

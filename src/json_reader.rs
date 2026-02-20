@@ -37,11 +37,10 @@ pub fn read_json(path: &str) -> Result<Vec<CacheMeta>, Box<dyn std::error::Error
                         "4way"          => 2,
                         "8way"          => 3,
                         "full"          => 4,
-                        _               => panic!("Unkown cache kind: {}", kind),
+                        _               => panic!("Unkown cache kind: {kind}"),
                 };
 
                 let rp_u8: u8 = match rp {
-                        "rr"    => 0,
                         "lru"   => 1,
                         "lfu"   => 2,
                         _       => 0,
