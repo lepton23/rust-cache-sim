@@ -98,7 +98,7 @@ impl<L: Cache> Cache for DirectCache<L> {
 
                 // check for hit
                 let stored_tag = unsafe { *self.tags.get_unchecked(index) };
-                if stored_tag == tag {
+                if likely(stored_tag == tag) {
                         // HIT
                         self.hits += 1;
                 } else {

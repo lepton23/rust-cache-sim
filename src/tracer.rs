@@ -130,6 +130,7 @@ unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
         // get final nibble values
         let nibbles = _mm256_add_epi8(low_nibbles, letter_offset);
 
+        // now we have nibbles in an interleaved format - need to reorder them with some shifting and masking
         let evens_shifted = _mm256_slli_epi16::<4>(nibbles);
         let evens_mask = _mm256_set1_epi16(0x00f0u16 as i16);
         let evens = _mm256_and_si256(evens_shifted, evens_mask);

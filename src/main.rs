@@ -35,6 +35,9 @@ struct SimulationResults {
         main_memory_accesses: u64,
 }
 
+// Macro to dispatch on cache type and create appropriate cache struct, then run body on that struct
+// It's a bit ugly, but allows us to avoid dynamic dispatch and still have a clean way to build the cache hierarchy
+// - that doesn't infinitely recurse
 macro_rules! dispatch {
         ($meta:expr, $lower:expr, $body:expr) => {
                 match $meta.kind {
@@ -46,11 +49,13 @@ macro_rules! dispatch {
         };
 }
 
+// Run tracefile entries through cache hierarchy
 fn run<C: Cache>(
         cache: &mut C,
         trace_path: &str,
         cache_names: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
+        // start processing tracefile & run through cache sim
         run_trace(cache, trace_path)?;
                 
         // Get total hits and misses for all caches
