@@ -5,10 +5,10 @@ use serde_json::{Value};
 use crate::caches::cachemeta::CacheMeta;
 
 // generate cache(s) metadata from json
-pub fn read_json(path: &str) -> Result<Vec<CacheMeta>, Box<dyn std::error::Error>> {
+pub fn read_json(path: &str) -> Vec<CacheMeta> {
 
         // read in json
-        let json_data = fs::read_to_string(path)?;
+        let json_data = fs::read_to_string(path).expect("Unable to read json file");
         let json: Value = 
                 serde_json::from_str(&json_data).expect("\nJSON formatted incorrectly.\n\n");
 
@@ -57,5 +57,5 @@ pub fn read_json(path: &str) -> Result<Vec<CacheMeta>, Box<dyn std::error::Error
                 );
         }
 
-        Ok(cachemetas)
+        cachemetas
 }

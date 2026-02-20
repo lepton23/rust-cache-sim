@@ -65,7 +65,7 @@ fn run<C: Cache>(
         cache_names: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
         // start processing tracefile & run through cache sim
-        run_trace(cache, trace_path)?;
+        run_trace(cache, trace_path);
                 
         // Get total hits and misses for all caches
         let hits = cache.get_hits(Vec::new());
@@ -95,15 +95,15 @@ fn run<C: Cache>(
 
         // let mut output_file = std::fs::File::create("results.json")?;
         // std::io::Write::write_all(&mut output_file, json_output.as_bytes())?;
+        Ok(())
 
-        Ok(())        
 }
 
 
-fn run_trace<C: Cache>(top_cache: &mut C, trace_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        process_trace(trace_path, |entry| {
+fn run_trace<C: Cache>(top_cache: &mut C, trace_path: &str) {
+        let _ = process_trace(trace_path, |entry| {
                 top_cache.access(entry.address, entry.size);
-        })
+        });
 }
 
 
@@ -114,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let trace_path = &args[2];
 
         // Read json file
-        let cachemetas: Vec<CacheMeta> = read_json(json_path)?;
+        let cachemetas: Vec<CacheMeta> = read_json(json_path);
 
         // Store cache names in order (top to bottom)
         let cache_names: Vec<String> = cachemetas.iter()
@@ -148,5 +148,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Ok(())
+
 }
 
