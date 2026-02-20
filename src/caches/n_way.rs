@@ -4,10 +4,10 @@ use crate::Cache;
 
 #[inline]
 #[cold]
-fn cold() {}
+const fn cold() {}
 
 #[inline]
-fn likely(b: bool) -> bool {
+const fn likely(b: bool) -> bool {
     if !b { cold() }
     b
 }
@@ -23,8 +23,8 @@ struct CacheSet<const N: usize> {
 const INVALID_TAG: u64 = u64::MAX;
 
 impl<const N: usize> CacheSet<N> {
-        fn new() -> Self {
-                CacheSet {
+        const fn new() -> Self {
+                Self {
                         tags: [INVALID_TAG; N],
                         rr_counter: 0,
                         access_order: [0; N],
@@ -46,7 +46,7 @@ impl<const N: usize> CacheSet<N> {
         }
 
         // Push tag to end of access_order
-        fn order_push(&mut self, tag: u64) {
+        const fn order_push(&mut self, tag: u64) {
                 let len = self.access_order_len as usize;
                 self.access_order[len] = tag;
                 self.access_order_len += 1;
@@ -117,7 +117,7 @@ impl<const N: usize, L: Cache> NWayCache<N, L> {
                         .collect();
 
                 // Construct cache
-                NWayCache {
+                Self {
                         offset_bits,
                         index_bits,
                         index_mask,
@@ -133,13 +133,13 @@ impl<const N: usize, L: Cache> NWayCache<N, L> {
 
         // extract set index from address
         #[inline(always)]
-        fn get_set_index(&self, address: u64) -> usize {
+        const fn get_set_index(&self, address: u64) -> usize {
                 ((address >> self.offset_bits) & self.index_mask) as usize
         }
 
         // extract tag from address
         #[inline(always)]
-        fn get_tag(&self, address: u64) -> u64 {
+        const fn get_tag(&self, address: u64) -> u64 {
                 address >> (self.offset_bits + self.index_bits)
         } 
 }

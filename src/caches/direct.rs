@@ -5,10 +5,10 @@ use crate::Cache;
 
 #[inline]
 #[cold]
-fn cold() {}
+const fn cold() {}
 
 #[inline]
-fn likely(b: bool) -> bool {
+const fn likely(b: bool) -> bool {
     if !b { cold() }
     b
 }
@@ -50,7 +50,7 @@ impl<L: Cache> DirectCache<L> {
                 let index_mask = (1u64 << index_bits) - 1;
 
                 // Initialise cache with empty lines
-                DirectCache {
+                Self {
                         offset_bits,
                         index_bits,
                         index_mask,

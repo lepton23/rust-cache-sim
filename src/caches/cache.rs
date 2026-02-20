@@ -12,8 +12,8 @@ pub struct MainMemory {
 }
 
 impl MainMemory {
-        pub fn new() -> Self {
-                MainMemory { accesses: 0 }
+        pub const fn new() -> Self {
+                Self { accesses: 0 }
         }
 }
 

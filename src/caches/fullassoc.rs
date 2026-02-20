@@ -7,12 +7,109 @@ use rustc_hash::FxBuildHasher;
 
 #[inline]
 #[cold]
-fn cold() {}
+const fn cold() {}
 
 #[inline]
-fn likely(b: bool) -> bool {
+const fn likely(b: bool) -> bool {
     if !b { cold() }
     b
+}
+
+// sentinel value to avoid using Option for tags
+const INVALID_TAG: u64 = u64::MAX;
+
+// min heap indexed by cache line used for LFU
+// entries keyed with frequency & insertion order for tiebreaking
+struct IndexedMinHeap {
+        heap: Vec<usize>,
+        heap_pos: Vec<usize>,
+        keys: Vec<(u64, u64)>,
+        len: usize,
+}
+
+impl IndexedMinHeap {
+        fn new(capacity: usize) -> Self {
+                Self {
+                        heap: vec![0; capacity],
+                        heap_pos: vec![usize::MAX; capacity],
+                        keys: vec![(0, 0); capacity],
+                        len: 0,
+                }
+        }
+
+        // compare keys
+        #[inline(always)]
+        fn less(&self, i: usize, j: usize) -> bool {
+                self.keys[self.heap[i]] < self.keys[self.heap[j]]
+        }
+
+        // swap keys
+        #[inline(always)]
+        fn swap(&mut self, i: usize, j: usize) {
+                self.heap.swap(i, j);
+                self.heap_pos[self.heap[i]] = i;
+                self.heap_pos[self.heap[j]] = j;
+        }
+
+        fn sift_up(&mut self, mut pos: usize) {
+                while pos > 0 {
+                        let parent = (pos - 1) / 2;
+                        if self.less(pos, parent) {
+                                self.swap(pos, parent);
+                                pos = parent;
+                        } else {
+                                break;
+                        }
+                }
+        }
+
+        fn sift_down(&mut self, mut pos: usize) {
+                let len = self.len;
+                loop {
+                        let left = 2 * pos + 1;
+                        let right = 2 * pos + 2;
+                        let mut smallest = pos;
+
+                        if left < len && self.less(left, smallest) {
+                                smallest = left;
+                        }
+                        if right < len && self.less(right, smallest) {
+                                smallest = right;
+                        }
+                        if smallest == pos {
+                                break;                                  
+                        } else {
+                                self.swap(pos, smallest);
+                                pos = smallest; 
+                        }
+                }
+        }
+
+        fn insert(&mut self, line_index: usize, key: (u64, u64)) {
+                let pos = self.len;
+                self.heap[pos] = line_index;
+                self.heap_pos[line_index] = pos;
+                self.keys[line_index] = key;
+                self.len += 1;
+                self.sift_up(pos);
+        }
+
+        #[inline(always)]
+        fn peek_min(&self) -> usize {
+                self.heap[0]
+        }
+
+        // update key for cache line and re heapify
+        fn update(&mut self, line_index: usize, key: (u64, u64)) {
+                let old = self.keys[line_index];
+                self.keys[line_index] = key;
+                let pos = self.heap_pos[line_index];
+                if key < old {
+                        self.sift_up(pos);
+                } else {
+                        self.sift_down(pos);
+                }
+        }
 }
 
 pub struct FullAssocCache<L: Cache> {
@@ -32,7 +129,8 @@ pub struct FullAssocCache<L: Cache> {
         global_clock: u64,
         rr_counter: usize, // for RR
         lru_timestamps: Vec<u64>, // for LRU
-        lfu_frequencies: Vec<u64>, // for LFU
+
+        lfu_heap: IndexedMinHeap,
 
         hits: u64,
         misses: u64,
@@ -42,7 +140,6 @@ pub struct FullAssocCache<L: Cache> {
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
 }
 
-const INVALID_TAG: u64 = u64::MAX;
 
 impl<L: Cache> FullAssocCache<L> {
         pub fn new(meta: &CacheMeta, lower: L) -> Self {
@@ -53,7 +150,7 @@ impl<L: Cache> FullAssocCache<L> {
                 let offset_bits = meta.line_size.trailing_zeros();
 
                 // Initialise cache
-                FullAssocCache {
+                Self {
                         offset_bits,
                         num_lines,
                         line_size: meta.line_size,
@@ -63,7 +160,7 @@ impl<L: Cache> FullAssocCache<L> {
                         global_clock: 0,
                         rr_counter: 0,
                         lru_timestamps: vec![0; num_lines],
-                        lfu_frequencies: vec![0; num_lines],
+                        lfu_heap: IndexedMinHeap::new(num_lines),
                         hits: 0,
                         misses: 0,
                         lower,
@@ -83,7 +180,8 @@ impl<L: Cache> FullAssocCache<L> {
                         },
                         2 => {
                                 // LFU update access frequency
-                                unsafe { *self.lfu_frequencies.get_unchecked_mut(idx) += 1 };
+                                let (freq, _) = self.lfu_heap.keys[idx];
+                                self.lfu_heap.update(idx, (freq + 1, idx as u64));
                         },
                         _ => unreachable!(),
                 }
@@ -120,16 +218,7 @@ impl<L: Cache> FullAssocCache<L> {
                         },
                         2 => {
                                 // LFU: find min freqeuncy, tiebreak w/ index
-                                let mut min_freq = u64::MAX;
-                                let mut min_idx = 0;
-                                for i in 0..self.num_lines {
-                                        let freq = unsafe { *self.lfu_frequencies.get_unchecked(i) };
-                                        if freq < min_freq {
-                                                min_freq = freq;
-                                                min_idx = i;
-                                        }
-                                }
-                                min_idx
+                                self.lfu_heap.peek_min()
                         },
                         _ => unreachable!(),
                 }
@@ -151,11 +240,16 @@ impl<L: Cache> FullAssocCache<L> {
                         1 => {
                                 // LRU update access order
                                 self.global_clock += 1;
-                                unsafe { *self.lru_timestamps.get_unchecked_mut(idx) = self.global_clock };
+                                unsafe { *self.lru_timestamps.get_unchecked_mut(idx) = self.global_clock; }
                         },
                         2 => {
                                 // LFU update access frequency
-                                unsafe { *self.lfu_frequencies.get_unchecked_mut(idx) = 0 };
+                                let new_key = (1u64, idx as u64);
+                                if old_tag == INVALID_TAG {
+                                        self.lfu_heap.insert(idx, new_key);
+                                } else {
+                                        self.lfu_heap.update(idx, new_key);
+                                }
                         },
                         _ => unreachable!(),
                 }
