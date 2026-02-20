@@ -12,24 +12,24 @@ fn likely(b: bool) -> bool {
     b
 }
 
-struct CacheSet {
-        tags: [u64; 8], // tag to index in cache lines
+struct CacheSet<const N: usize> {
+        tags: [u64; N], // tag to index in cache lines
         rr_counter: usize,
-        access_order: [u64; 8],
+        access_order: [u64; N],
         access_order_len: u8, // how many valid tags for LRU
-        access_frequency: [u64; 8],
+        access_frequency: [u64; N],
 }
 
 const INVALID_TAG: u64 = u64::MAX;
 
-impl CacheSet {
+impl<const N: usize> CacheSet<N> {
         fn new() -> Self {
                 CacheSet {
-                        tags: [INVALID_TAG; 8],
+                        tags: [INVALID_TAG; N],
                         rr_counter: 0,
-                        access_order: [0; 8],
+                        access_order: [0; N],
                         access_order_len: 0,
-                        access_frequency: [0; 8],
+                        access_frequency: [0; N],
                 }
         }
 
@@ -70,7 +70,7 @@ impl CacheSet {
         }
 }
 
-pub struct NWayCache<L: Cache> {
+pub struct NWayCache<const N: usize, L: Cache> {
         offset_bits: u32,
         index_bits: u32,
         index_mask: u64,
@@ -80,7 +80,7 @@ pub struct NWayCache<L: Cache> {
         // Cache storage //
         // Store vec of sets rather than vec of tags
         // for replacement policies track order & frequency within each set
-        sets: Vec<CacheSet>,        
+        sets: Vec<CacheSet<N>>,        
 
         hits: u64,
         misses: u64,
@@ -91,7 +91,7 @@ pub struct NWayCache<L: Cache> {
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
 }
 
-impl<L: Cache> NWayCache<L> {
+impl<const N: usize, L: Cache> NWayCache<N, L> {
         pub fn new(meta: &CacheMeta, lower: L) -> Self {
 
                 let asso_num: usize = match meta.kind {
@@ -144,7 +144,7 @@ impl<L: Cache> NWayCache<L> {
         } 
 }
 
-impl<L: Cache> Cache for NWayCache<L> {
+impl<const N: usize, L: Cache> Cache for NWayCache<N, L> {
         // "Perform access"
         fn access(&mut self, address: u64, size: u64) {
                 // Calculate which cache lines are accessed (& check for accesses that span across lines)

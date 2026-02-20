@@ -173,7 +173,7 @@ where
         let file = File::open(path)?;
 
         // prefault all pages to avoid page faults during processing
-        let mmap = unsafe { MmapOptions::new().no_reserve_swap().populate().map(&file)? };
+        let mmap = unsafe { MmapOptions::new().no_reserve_swap().map(&file)? };
 
         // advise kernel of access pattern for better readahead
         // no need for MADV_WILLNEED since populate already faults pages in
@@ -181,7 +181,7 @@ where
                 libc::madvise(
                         mmap.as_ptr() as *mut libc::c_void,
                         mmap.len(),
-                        libc::MADV_SEQUENTIAL
+                        libc::MADV_SEQUENTIAL | libc::MADV_WILLNEED
                 );
         }
 
@@ -193,23 +193,23 @@ where
         for i in 0..quads {
                 let offset = (i * 4) * line_width;
 
-                // originally manually prefetched 8 lines ahead, but already using MADV_WILLNEED, so the kernel will read ahead anyway                                
                 unsafe {
+                        // Not sure why - but parsing and processing 2 pairs sequentially seems to be fasted than parsing and processing a quad sequentially  
                         let ptr0 = mmap.as_ptr().add(offset);
                         let ptr1 = mmap.as_ptr().add(offset + line_width);
-                        let ptr2 = mmap.as_ptr().add(offset + 2 * line_width);
-                        let ptr3 = mmap.as_ptr().add(offset + 3 * line_width);
-
                         let (addr0, addr1) = parse_line_pair_simd(ptr0.add(17), ptr1.add(17));
-                        let (addr2, addr3) = parse_line_pair_simd(ptr2.add(17), ptr3.add(17));
                         let (size0, size1) = parse_decimal_pair(ptr0.add(36), ptr1.add(36));
-                        let (size2, size3) = parse_decimal_pair(ptr2.add(36), ptr3.add(36));
-
                         process(TraceEntry { address: addr0, size: size0 });
                         process(TraceEntry { address: addr1, size: size1 });
+
+                        // so do lines 2 by 2, maybe allows for better pipelining
+                        let ptr2 = mmap.as_ptr().add(offset + 2 * line_width);
+                        let ptr3 = mmap.as_ptr().add(offset + 3 * line_width);
+                        let (addr2, addr3) = parse_line_pair_simd(ptr2.add(17), ptr3.add(17));
+                        let (size2, size3) = parse_decimal_pair(ptr2.add(36), ptr3.add(36));
                         process(TraceEntry { address: addr2, size: size2 });
                         process(TraceEntry { address: addr3, size: size3 });
-
+  
                 }
 
         }

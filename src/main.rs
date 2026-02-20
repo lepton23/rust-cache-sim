@@ -1,4 +1,11 @@
+
+// #[global_allocator]
+// static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+// originally tried using mimalloc as an allocator alternative but no noticeable performance difference
+
 use std::env;
+use std::io::Write;
 
 use serde::{Serialize, Deserialize};
 
@@ -42,7 +49,9 @@ macro_rules! dispatch {
         ($meta:expr, $lower:expr, $body:expr) => {
                 match $meta.kind {
                         0 => { let cache = DirectCache::new(&$meta.clone(), $lower); $body(cache) }
-                        1..=3 => { let cache = NWayCache::new(&$meta.clone(), $lower); $body(cache) }
+                        1 => { let cache = NWayCache::<2, _>::new(&$meta.clone(), $lower); $body(cache) }
+                        2 => { let cache = NWayCache::<4, _>::new(&$meta.clone(), $lower); $body(cache) }
+                        3 => { let cache = NWayCache::<8, _>::new(&$meta.clone(), $lower); $body(cache) }
                         4 => { let cache = FullAssocCache::new(&$meta.clone(), $lower); $body(cache) }
                         _ => panic!("Unsupported cache type"),
                 }
@@ -79,7 +88,10 @@ fn run<C: Cache>(
         };
 
         let json_output = serde_json::to_string_pretty(&results)?;
-        println!("{json_output}");
+
+        // faster than println since we dont need to acquire a lock
+        let mut stdout = std::io::stdout();
+        writeln!(stdout, "{json_output}")?;
 
         // let mut output_file = std::fs::File::create("results.json")?;
         // std::io::Write::write_all(&mut output_file, json_output.as_bytes())?;
