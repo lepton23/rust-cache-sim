@@ -41,7 +41,9 @@ pub struct DirectCache<L: Cache> {
 const INVALID_TAG: u64 = u64::MAX;
 
 
+// Direct Cache implementation
 impl<L: Cache> DirectCache<L> {
+        // Generic reference to lower passed into constructor for monomorphisation of cache hierarchy at compile time
         pub fn new(meta: &CacheMeta, lower: L) -> Self {
                 // Calculate bits for offset, index, and tag
                 let offset_bits = meta.line_size.trailing_zeros();
@@ -51,6 +53,7 @@ impl<L: Cache> DirectCache<L> {
 
                 let index_bits = num_lines.trailing_zeros();
 
+                // Mask used to extract index from line address
                 let index_mask = (1u64 << index_bits) - 1;
 
                 // Initialise cache with empty lines
@@ -98,17 +101,15 @@ impl<L: Cache> Cache for DirectCache<L> {
                 let stored_tag = unsafe { *self.tags.get_unchecked(index) };
                 // fast route for hits
                 if likely(stored_tag == tag) {
-                        // HIT
                         self.hits += 1;
                 } else {
-                        // MISS
                         // we're just simulating reads, so can just overwrite lines on miss without worrying about evicting dirty lines
                         unsafe { *self.tags.get_unchecked_mut(index) = tag };
                         self.misses += 1;
 
                         // If we have a lower level cache, access it as well
                         // if not - "Access main memory"
-                        // fetch entire cache line
+                        // fetch entire cache line from start address of line
                         self.lower.access(line_index << self.offset_bits, self.line_size);
                 }
         }
@@ -136,4 +137,4 @@ impl<L: Cache> Cache for DirectCache<L> {
         fn get_main_memory_accesses(&self) -> u64 {
                 self.lower.get_main_memory_accesses()
         }
-}
+} // impl Cache for DirectCache

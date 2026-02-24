@@ -1,3 +1,5 @@
+
+// Generic cache trait and main memory implementation
 pub trait Cache {
         fn access(&mut self, address: u64, size: u64);
         fn access_line(&mut self, line_index: u64);
@@ -39,7 +41,7 @@ impl Cache for MainMemory {
         }
 }
 
-
+// cache implementation for dynamic dispatched caches
 impl Cache for Box<dyn Cache> {
         fn access(&mut self, address: u64, size: u64) {
                 self.as_mut().access(address, size);

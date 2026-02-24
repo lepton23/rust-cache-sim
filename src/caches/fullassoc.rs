@@ -2,9 +2,12 @@
 use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
 
+// FxHashMap is much more performant than the standard library HashMap
+// - since we don't need the security guarantees of a cryptographic hasher
 use rustc_hash::FxHashMap;
 use rustc_hash::FxBuildHasher;
 
+// const functions used for branch prediction hints in hot if statement paths
 #[inline]
 #[cold]
 const fn cold() {}
@@ -18,9 +21,13 @@ const fn likely(b: bool) -> bool {
 // sentinel value to avoid using Option for tags
 const INVALID_TAG: u64 = u64::MAX;
 
-// min heap indexed by cache line used for LFU
-// entries keyed with frequency & insertion order for tiebreaking
+// Min-heap indexed by cache line used for LFU
+// Entries keyed with frequency & insertion order for tiebreaking
+// Could have used a BTree but this is simpler and more performant
+// Originally used a hashmap only, but that had O(n) complexity for eviction
+// This has O(log n) complexity for insertions and updates, but O(1) for eviction since the target is always kept at the top of the heap
 struct IndexedMinHeap {
+        // boxes used for cache locality - requires less storage than a Vec since it doesn't store capacity
         heap: Box<[usize]>,
         heap_pos: Box<[usize]>,
         keys: Box<[(u64, u64)]>,
@@ -37,13 +44,13 @@ impl IndexedMinHeap {
                 }
         }
 
-        // compare keys
+        // Compare keys
         #[inline(always)]
         fn less(&self, i: usize, j: usize) -> bool {
                 self.keys[self.heap[i]] < self.keys[self.heap[j]]
         }
 
-        // swap keys
+        // Swap keys
         #[inline(always)]
         fn swap(&mut self, i: usize, j: usize) {
                 self.heap.swap(i, j);
@@ -51,6 +58,7 @@ impl IndexedMinHeap {
                 self.heap_pos[self.heap[j]] = j;
         }
 
+        // Sift heap up and down for insertions & updates
         fn sift_up(&mut self, mut pos: usize) {
                 while pos > 0 {
                         let parent = (pos - 1) / 2;
@@ -85,6 +93,7 @@ impl IndexedMinHeap {
                 }
         }
 
+        // Insert new heap key with key (frequency, cache index)
         fn insert(&mut self, line_index: usize, key: (u64, u64)) {
                 let pos = self.len;
                 self.heap[pos] = line_index;
@@ -94,6 +103,7 @@ impl IndexedMinHeap {
                 self.sift_up(pos);
         }
 
+        // O(1) access to min key for eviction
         #[inline(always)]
         fn peek_min(&self) -> usize {
                 self.heap[0]
@@ -110,7 +120,7 @@ impl IndexedMinHeap {
                         self.sift_down(pos);
                 }
         }
-}
+} // IndexedMinHeap
 
 #[repr(C)]
 pub struct FullAssocCache<L: Cache> {
@@ -122,8 +132,7 @@ pub struct FullAssocCache<L: Cache> {
         lru_timestamps: Box<[u64]>, // for LRU
 
         // For replacement policies track order & frequency
-        // use flat arrays for cache locality
-        global_clock: u64,
+        global_clock: u64, // for LRU
         rr_counter: usize, // for RR
 
         num_lines: usize,
@@ -143,6 +152,7 @@ pub struct FullAssocCache<L: Cache> {
 
 
 impl<L: Cache> FullAssocCache<L> {
+        // Generic reference to lower passed into constructor for monomorphisation of cache hierarchy at compile time
         pub fn new(meta: &CacheMeta, lower: L) -> Self {
                 // Calculate no of cache lines
                 let num_lines = (meta.size / meta.line_size) as usize;
@@ -169,7 +179,7 @@ impl<L: Cache> FullAssocCache<L> {
                 }
         }
 
-       
+        // Handle hits for different replacement policies        
         #[inline(always)]
         fn on_hit(&mut self, idx: usize) {
                 match self.rp {
@@ -188,6 +198,7 @@ impl<L: Cache> FullAssocCache<L> {
                 }
         }
 
+        // Find victim line accordint to replacement policy
         #[inline(always)]
         fn find_victim(&mut self) -> usize {
                 // if cache not full, use next empty slot
@@ -223,7 +234,7 @@ impl<L: Cache> FullAssocCache<L> {
                         },
                         _ => unreachable!(),
                 }
-        }
+        } // find_victim
 
         #[inline(always)]
         fn replace_line(&mut self, idx: usize, tag: u64) {
@@ -255,7 +266,7 @@ impl<L: Cache> FullAssocCache<L> {
                         _ => unreachable!(),
                 }
         } 
-}
+} // FullAssocCache
         
 impl<L: Cache> Cache for FullAssocCache<L> {
         // "Perform access"
@@ -265,6 +276,7 @@ impl<L: Cache> Cache for FullAssocCache<L> {
                 let start_line = address >> self.offset_bits;
                 let end_line = (address + size - 1) >> self.offset_bits; 
 
+                // hot path for accesses that only touch 1 line
                 if likely(start_line == end_line) {
                         self.access_line(start_line);
                 } else {
@@ -280,18 +292,19 @@ impl<L: Cache> Cache for FullAssocCache<L> {
         fn access_line(&mut self, line_index: u64) {
                 let tag = line_index;
                 
+                // get cache line index from tags map - O(1)
                 let found = self.tags_map.get(&tag).copied();
 
                 if let Some(idx) = found {
-                        // HIT
                         self.hits += 1;
-                        self.on_hit(idx);
+                        self.on_hit(idx); // handle hit
                 } else {
                         // MISS
                         self.misses += 1;
                         let victim_idx = self.find_victim();
                         self.replace_line(victim_idx, tag);
 
+                        // access lower level cache on miss - fetch entire cache line from start address of line
                         self.lower.access(line_index << self.offset_bits, self.line_size);
                 }
         }
@@ -318,5 +331,5 @@ impl<L: Cache> Cache for FullAssocCache<L> {
         fn get_main_memory_accesses(&self) -> u64 {
                 self.lower.get_main_memory_accesses()
         }
-}
+} // impl Cache for FullAssocCache
 

@@ -68,14 +68,14 @@ for expected in "$OUTPUTS_DIR"/output-*.json; do
   fi
 
   # compare actual vs expected
-  if diff -q "$expected" "$actual_file" >/dev/null 2>&1; then
+  if diff -q <(sed -e '$a\' "$expected") <(sed -e '$a\' "$actual_file") >/dev/null 2>&1; then
     echo -e "${GREEN}PASS${NC} $filename"
     pass=$((pass + 1))
   else
     echo -e "${RED}FAIL${NC} $filename"
     echo "  --- expected"
     echo "  +++ actual"
-    diff "$expected" "$actual_file" | sed 's/^/  /'
+    diff <(sed -e '$a\' "$expected") <(sed -e '$a\' "$actual_file") | sed 's/^/  /'
     fail=$((fail + 1))
   fi
 done

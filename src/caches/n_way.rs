@@ -2,6 +2,7 @@
 use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
 
+// const functions used for branch prediction hints in hot if statement paths
 #[inline]
 #[cold]
 const fn cold() {}
@@ -12,6 +13,8 @@ const fn likely(b: bool) -> bool {
     b
 }
 
+// CacheSet struct used for set associative caches
+// const N generic parameter used to specify associativity at compile time for better performance
 struct CacheSet<const N: usize> {
         tags: [u64; N], // tag to index in cache lines
         rr_counter: usize,
@@ -22,6 +25,7 @@ struct CacheSet<const N: usize> {
 
 const INVALID_TAG: u64 = u64::MAX;
 
+// const functions allow for compile-time evaluation of cache set operations
 impl<const N: usize> CacheSet<N> {
         const fn new() -> Self {
                 Self {
@@ -68,13 +72,13 @@ impl<const N: usize> CacheSet<N> {
                 self.order_remove(tag);
                 self.order_push(tag);
         }
-}
+} // CacheSet
 
 #[repr(C)]
 pub struct NWayCache<const N: usize, L: Cache> {
         // hot path fields
 
-        // Store vec of sets rather than vec of tags
+        // Store box of sets rather than box of tags
         // for replacement policies track order & frequency within each set
         sets: Box<[CacheSet<N>]>,        
         
@@ -96,6 +100,7 @@ pub struct NWayCache<const N: usize, L: Cache> {
 }
 
 impl<const N: usize, L: Cache> NWayCache<N, L> {
+        // Generic reference to lower passed into constructor for monomorphisation of cache hierarchy at compile time
         pub fn new(meta: &CacheMeta, lower: L) -> Self {
 
                 let asso_num: usize = match meta.kind {
@@ -147,7 +152,7 @@ impl<const N: usize, L: Cache> NWayCache<N, L> {
         const fn get_tag(&self, address: u64) -> u64 {
                 address >> (self.offset_bits + self.index_bits)
         } 
-}
+} // impl NWayCache
 
 impl<const N: usize, L: Cache> Cache for NWayCache<N, L> {
         // "Perform access"
@@ -157,6 +162,7 @@ impl<const N: usize, L: Cache> Cache for NWayCache<N, L> {
                 let start_line = address >> self.offset_bits;
                 let end_line = (address + size - 1) >> self.offset_bits; 
 
+                // fast route for accesses that only touch 1 line
                 if likely(start_line == end_line) {
                         self.access_line(start_line);
                 } else {
@@ -263,13 +269,13 @@ impl<const N: usize, L: Cache> Cache for NWayCache<N, L> {
                                 else if self.rp == 2 {
                                         set.access_frequency[victim_index] = 1;
                                 }
-                        }
+                        } // if set not full / full
 
                         // On miss, access lower-level cache if exists, otherwise "access main memory"
                         self.lower.access(line_index << self.offset_bits, self.line_size);
 
-                }      
-        }
+                } // if hit or miss
+        } // access_line
 
         // Recursively get metadata on hits and misses from this cache and all lower caches
         // Format into vec
@@ -293,4 +299,4 @@ impl<const N: usize, L: Cache> Cache for NWayCache<N, L> {
         fn get_main_memory_accesses(&self) -> u64 {
                 self.lower.get_main_memory_accesses()
         }
-}
+} // impl Cache for NWayCache
