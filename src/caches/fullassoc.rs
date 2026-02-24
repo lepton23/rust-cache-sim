@@ -21,18 +21,18 @@ const INVALID_TAG: u64 = u64::MAX;
 // min heap indexed by cache line used for LFU
 // entries keyed with frequency & insertion order for tiebreaking
 struct IndexedMinHeap {
-        heap: Vec<usize>,
-        heap_pos: Vec<usize>,
-        keys: Vec<(u64, u64)>,
+        heap: Box<[usize]>,
+        heap_pos: Box<[usize]>,
+        keys: Box<[(u64, u64)]>,
         len: usize,
 }
 
 impl IndexedMinHeap {
         fn new(capacity: usize) -> Self {
                 Self {
-                        heap: vec![0; capacity],
-                        heap_pos: vec![usize::MAX; capacity],
-                        keys: vec![(0, 0); capacity],
+                        heap: vec![0; capacity].into_boxed_slice(),
+                        heap_pos: vec![usize::MAX; capacity].into_boxed_slice(),
+                        keys: vec![(0, 0); capacity].into_boxed_slice(),
                         len: 0,
                 }
         }
@@ -112,25 +112,26 @@ impl IndexedMinHeap {
         }
 }
 
+#[repr(C)]
 pub struct FullAssocCache<L: Cache> {
-        offset_bits: u32,
-        num_lines: usize,
-        line_size: u64,
-        occupied: usize,
-
-        // Cache storage
-        
+        // hot path fields
+        lfu_heap: IndexedMinHeap,
         // Store hashmap of tags to their index in the cache
-        tags: Vec<u64>,
-        tags_map: FxHashMap<u64, usize>,
+        tags: Box<[u64]>,
+        tags_map: FxHashMap<u64, usize>, 
+        lru_timestamps: Box<[u64]>, // for LRU
 
         // For replacement policies track order & frequency
         // use flat arrays for cache locality
         global_clock: u64,
         rr_counter: usize, // for RR
-        lru_timestamps: Vec<u64>, // for LRU
 
-        lfu_heap: IndexedMinHeap,
+        num_lines: usize,
+        line_size: u64,
+        occupied: usize,
+        offset_bits: u32,
+
+        // cold-ish fields
 
         hits: u64,
         misses: u64,
@@ -151,16 +152,16 @@ impl<L: Cache> FullAssocCache<L> {
 
                 // Initialise cache
                 Self {
-                        offset_bits,
+                        lfu_heap: IndexedMinHeap::new(num_lines),
+                        tags: vec![INVALID_TAG; num_lines].into_boxed_slice(),
+                        tags_map: FxHashMap::with_capacity_and_hasher(num_lines, FxBuildHasher),
+                        lru_timestamps: vec![0; num_lines].into_boxed_slice(),
+                        global_clock: 0,
+                        rr_counter: 0,
                         num_lines,
                         line_size: meta.line_size,
                         occupied: 0,
-                        tags: vec![INVALID_TAG; num_lines],
-                        tags_map: FxHashMap::with_capacity_and_hasher(num_lines, FxBuildHasher),
-                        global_clock: 0,
-                        rr_counter: 0,
-                        lru_timestamps: vec![0; num_lines],
-                        lfu_heap: IndexedMinHeap::new(num_lines),
+                        offset_bits,
                         hits: 0,
                         misses: 0,
                         lower,

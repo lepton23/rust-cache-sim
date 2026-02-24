@@ -146,9 +146,9 @@ unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
         // use pshufb to pack them back together
         let shuffle = _mm256_set_epi8(
                 -1, -1, -1, -1, -1, -1, -1, -1,
-                14, 12, 10, 8, 6, 4, 2, 0,
+                0, 2, 4, 6, 8, 10, 12, 14,
                 -1, -1, -1, -1, -1, -1, -1, -1,
-                14, 12, 10, 8, 6, 4, 2, 0 
+                0, 2, 4, 6, 8, 10, 12, 14 
         );
         let packed = _mm256_shuffle_epi8(combined, shuffle);
 
@@ -156,8 +156,8 @@ unsafe fn parse_line_pair_simd(ptr0: *const u8, ptr1: *const u8) -> (u64, u64) {
         let lane0 = _mm256_castsi256_si128(packed);
         let lane1 = _mm256_extracti128_si256::<1>(packed);
 
-        let result0 = (_mm_cvtsi128_si64(lane0).cast_unsigned()).swap_bytes(); 
-        let result1 = (_mm_cvtsi128_si64(lane1).cast_unsigned()).swap_bytes();
+        let result0 = _mm_cvtsi128_si64(lane0).cast_unsigned(); 
+        let result1 = _mm_cvtsi128_si64(lane1).cast_unsigned();
         
         // return both results
         (result0, result1)
@@ -173,7 +173,7 @@ where
         let file = File::open(path)?;
 
         // prefault all pages to avoid page faults during processing
-        let mmap = unsafe { MmapOptions::new().no_reserve_swap().map(&file)? };
+        let mmap = unsafe { MmapOptions::new().populate().map(&file)? };
 
         // advise kernel of access pattern for better readahead
         // no need for MADV_WILLNEED since populate already faults pages in
@@ -181,7 +181,7 @@ where
                 libc::madvise(
                         mmap.as_ptr() as *mut libc::c_void,
                         mmap.len(),
-                        libc::MADV_SEQUENTIAL | libc::MADV_WILLNEED
+                        libc::MADV_SEQUENTIAL | libc::MADV_HUGEPAGE,
                 );
         }
 
@@ -192,6 +192,11 @@ where
         let quads = total_lines / 4;
         for i in 0..quads {
                 let offset = (i * 4) * line_width;
+
+                let prefetch_offset = offset + 64 * line_width; // 16 quads ahead
+                if prefetch_offset < mmap.len() {
+                        unsafe { _mm_prefetch::<_MM_HINT_T0>(mmap.as_ptr().add(prefetch_offset) as *const i8); }
+                }
 
                 unsafe {
                         // Not sure why - but parsing and processing 2 pairs sequentially seems to be fasted than parsing and processing a quad sequentially  

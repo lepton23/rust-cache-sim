@@ -39,3 +39,25 @@ impl Cache for MainMemory {
         }
 }
 
+
+impl Cache for Box<dyn Cache> {
+        fn access(&mut self, address: u64, size: u64) {
+                self.as_mut().access(address, size);
+        }
+
+        fn access_line(&mut self, line_index: u64) {
+                self.as_mut().access_line(line_index);
+        }
+
+        fn get_hits(&self, hits_vec: Vec<u64>) -> Vec<u64> {
+                self.as_ref().get_hits(hits_vec)
+        }
+
+        fn get_misses(&self, misses_vec: Vec<u64>) -> Vec<u64> {
+                self.as_ref().get_misses(misses_vec)
+        }
+
+        fn get_main_memory_accesses(&self) -> u64 {
+                self.as_ref().get_main_memory_accesses()
+        }
+}

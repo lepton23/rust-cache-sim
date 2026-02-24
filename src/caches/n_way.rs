@@ -70,22 +70,26 @@ impl<const N: usize> CacheSet<N> {
         }
 }
 
+#[repr(C)]
 pub struct NWayCache<const N: usize, L: Cache> {
-        offset_bits: u32,
-        index_bits: u32,
+        // hot path fields
+
+        // Store vec of sets rather than vec of tags
+        // for replacement policies track order & frequency within each set
+        sets: Box<[CacheSet<N>]>,        
+        
         index_mask: u64,
         line_size: u64,
         asso_num: usize,
 
-        // Cache storage //
-        // Store vec of sets rather than vec of tags
-        // for replacement policies track order & frequency within each set
-        sets: Vec<CacheSet<N>>,        
+        offset_bits: u32,
+        index_bits: u32,
 
+        // cold-ish fields
         hits: u64,
         misses: u64,
 
-        // Store a reference to lower level cache if exists
+        // Store a reference to lower level cache
         lower: L,
 
         rp: u8, // replacement policy - 0 = RR, 1 = LRU, 2 = LFU
@@ -114,16 +118,17 @@ impl<const N: usize, L: Cache> NWayCache<N, L> {
                 // Initialise sets
                 let sets = (0..num_sets)
                         .map(|_| CacheSet::new())
-                        .collect();
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
 
                 // Construct cache
                 Self {
-                        offset_bits,
-                        index_bits,
+                        sets,
                         index_mask,
                         line_size: meta.line_size,
                         asso_num,
-                        sets,
+                        offset_bits,
+                        index_bits,
                         hits: 0,
                         misses: 0,
                         lower,
@@ -160,7 +165,6 @@ impl<const N: usize, L: Cache> Cache for NWayCache<N, L> {
                                 self.access_line(line_index);
                         }
                 }
-
         }
        
         #[inline(always)]

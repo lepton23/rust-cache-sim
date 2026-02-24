@@ -3,6 +3,7 @@ use crate::caches::cachemeta::CacheMeta;
 use crate::Cache;
 
 
+// const functions used for branch prediction hints in hot if statement paths
 #[inline]
 #[cold]
 const fn cold() {}
@@ -13,19 +14,22 @@ const fn likely(b: bool) -> bool {
     b
 }
 
+// repr C used to order fields for better cache locality
+#[repr(C)]
 pub struct DirectCache<L: Cache> {
-        offset_bits: u32,
-        index_bits: u32,
-        index_mask: u64,
-        line_size: u64,
+        // hot path fields 
 
         // Cache storage
         // No need for valid bits or dirty bits since we are only simulating reads
-        
-        // Store tags as a vector of u64s, where each u64 represents the tag of a cache line
-        // Option used to represent valid/invalid lines
-        tags: Vec<u64>,
+        // Store tags as a box of u64s, where each u64 represents the tag of a cache line
+        // box is used since it stores pointer + length, vs the pointer + length + capacity of a vec
+        tags: Box<[u64]>,        
+        index_mask: u64,
+        line_size: u64,
+        offset_bits: u32,
+        index_bits: u32,
 
+        // cold-ish fields
         hits: u64,
         misses: u64,
 
@@ -51,11 +55,11 @@ impl<L: Cache> DirectCache<L> {
 
                 // Initialise cache with empty lines
                 Self {
+                        tags: vec![INVALID_TAG; num_lines as usize].into_boxed_slice(),
+                        index_mask,
+                        line_size, 
                         offset_bits,
                         index_bits,
-                        index_mask,
-                        line_size,
-                        tags: vec![INVALID_TAG; num_lines as usize],
                         hits: 0,
                         misses: 0,
                         lower,

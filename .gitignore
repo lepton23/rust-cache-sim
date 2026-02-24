@@ -6,7 +6,10 @@ results.json
 
 trace-files
 sample-inputs
+sample-outputs
+actual
 
+test-inputs
 
 perf.data
 perf.data.*
